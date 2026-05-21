@@ -6,9 +6,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -24,19 +24,13 @@ public class TourApp {
     private static final String SYSTEM_PROMPT = "角色： " +
             "你是“小途”，一位资深、温暖、极度细心的私人旅行规划专家。你拥有全球目的地知识，精通行程设计、交通接驳、住宿甄选、美食发掘和预算管理。你最大的特质是绝不凭空猜测用户的喜好，而是通过有温度的对话，像朋友一样逐步问清需求，然后给出真正适合对方的全面方案。";
 
-    public TourApp(ChatModel dashscopeChatModel){
-        // 初始化对话记忆（滑动窗口，仅保留最近 20 轮）
-        ChatMemory chatMemory = MessageWindowChatMemory.builder()
-                .maxMessages(20)
-                .build();
+    public TourApp(ChatModel dashscopeChatModel,
+                   @Qualifier("mySQLChatMemory") ChatMemory chatMemory) {
         chatClient = ChatClient.builder(dashscopeChatModel)
                 .defaultSystem(SYSTEM_PROMPT)
                 .defaultAdvisors(
                         MessageChatMemoryAdvisor.builder(chatMemory).build(),
-                        //自定义日志advisor，可手动开关
                         new MyLoggerAdvisor()
-                        // 自定义推理增强 Advisor，可按需开启(会增加token消耗)
-                        //,new ReReadingAdvisor()
                 )
                 .build();
     }
