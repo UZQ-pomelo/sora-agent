@@ -1,14 +1,17 @@
 package com.sora.sora_agent.rag;
 
 import jakarta.annotation.Resource;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.model.transformer.KeywordMetadataEnricher;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
 
 import java.util.List;
 
@@ -23,6 +26,8 @@ public class TourAppVectorStoreConfig {
 
     @Resource
     private TourAppDocumentLoader tourAppDocumentLoader;
+    @Resource
+    private MyKeywordMetadataEnricher myKeywordMetadataEnricher;
 
     /**
      * pgvector 向量存储 Bean, Bean 名为 {@code tourappVectorStore}。
@@ -42,6 +47,9 @@ public class TourAppVectorStoreConfig {
         store.afterPropertiesSet();
 
         List<Document> documents = tourAppDocumentLoader.loadMarkdowns();
+
+        //自动补充关键词元信息
+        List<Document> enrichedDocuments = myKeywordMetadataEnricher.enrichedDocuments(documents);
         // DashScope embedding API 单次最多 10 条，分批写入
         int batchSize = 10;
         for (int i = 0; i < documents.size(); i += batchSize) {
@@ -50,4 +58,5 @@ public class TourAppVectorStoreConfig {
         }
         return store;
     }
+
 }

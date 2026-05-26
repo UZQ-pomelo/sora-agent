@@ -56,6 +56,7 @@ public class TourApp {
 
     /**
      * 调用chatClient对象, 传入用户prompt, 给advisor指定对话id
+     * 使用的是阿里云百炼的agent，自带一个知识库
      */
     public String doChat(String message, String chatId) {
         ChatResponse response = chatClient
@@ -84,6 +85,9 @@ public class TourApp {
         return tourReport;
     }
 
+    /**
+     * 本地知识库，存储在PGvector
+     */
     public String doChatWithRag(String message, String chatId) {
         ChatResponse chatresponse = chatClient
                 .prompt()
