@@ -1,0 +1,61 @@
+{
+  "properties": [
+    {
+      "name": "spring.ai.vectorstore.pgvector.initialize-schema",
+      "type": "java.lang.Boolean",
+      "description": "Whether to auto-create the vector store table on startup.",
+      "defaultValue": false
+    },
+    {
+      "name": "spring.ai.vectorstore.pgvector.index-type",
+      "type": "org.springframework.ai.vectorstore.pgvector.PgVectorStore$PgIndexType",
+      "description": "Index type for vector search. Supported: HNSW, IVFFlat.",
+      "defaultValue": "HNSW"
+    },
+    {
+      "name": "spring.ai.vectorstore.pgvector.dimensions",
+      "type": "java.lang.Integer",
+      "description": "Vector dimensions of the embedding model.",
+      "defaultValue": 1536
+    },
+    {
+      "name": "spring.ai.vectorstore.pgvector.distance-type",
+      "type": "org.springframework.ai.vectorstore.pgvector.PgVectorStore$PgDistanceType",
+      "description": "Distance function for similarity search. Supported: COSINE_DISTANCE, EUCLIDEAN_DISTANCE, NEGATIVE_INNER_PRODUCT.",
+      "defaultValue": "COSINE_DISTANCE"
+    },
+    {
+      "name": "spring.ai.vectorstore.pgvector.max-document-batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum number of documents to insert per batch.",
+      "defaultValue": 10
+    },
+    {
+      "name": "spring.ai.vectorstore.pgvector.schema-name",
+      "type": "java.lang.String",
+      "description": "PostgreSQL schema name for the vector store table.",
+      "defaultValue": "public"
+    },
+    {
+      "name": "app.datasource.postgresql.driver-class-name",
+      "type": "java.lang.String",
+      "description": "JDBC driver class for the PostgreSQL datasource.",
+      "defaultValue": "org.postgresql.Driver"
+    },
+    {
+      "name": "app.datasource.postgresql.jdbc-url",
+      "type": "java.lang.String",
+      "description": "JDBC URL for the PostgreSQL datasource used by pgvector."
+    },
+    {
+      "name": "app.datasource.postgresql.username",
+      "type": "java.lang.String",
+      "description": "Username for the PostgreSQL datasource."
+    },
+    {
+      "name": "app.datasource.postgresql.password",
+      "type": "java.lang.String",
+      "description": "Password for the PostgreSQL datasource."
+    }
+  ]
+}

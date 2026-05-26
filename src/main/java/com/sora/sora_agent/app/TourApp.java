@@ -1,13 +1,19 @@
 package com.sora.sora_agent.app;
 
+import com.alibaba.cloud.ai.agent.Agent;
 import com.alibaba.cloud.ai.dashscope.spec.DashScopeModel;
 import com.sora.sora_agent.advisor.MyLoggerAdvisor;
+import com.sora.sora_agent.config.ToolConfig;
+import com.sora.sora_agent.rag.TourAppVectorStoreConfig;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +27,9 @@ public class TourApp {
 
     private final ChatClient chatClient;
 
+    @Resource
+    private VectorStore tourappVectorStore;
+
     private static final String SYSTEM_PROMPT = "角色: "
             + "你是小途, 一位资深、温暖、极度细心的私人旅行规划专家。"
             + "你拥有全球目的地知识, 精通行程设计、交通接驳、住宿甄选、美食发掘和预算管理。"
@@ -30,17 +39,18 @@ public class TourApp {
             + "当用户说帮我生成一张xx图片时, 你会调用 generateImage 工具来创作图片。"
             + "拿到图片URL后, 将其转换为可查看的代理链接展示给用户: "
             + "http://localhost:8080/api/image/proxy?url={URL}, "
-            + "并提醒用户可以直接在浏览器中打开查看。";
+            + "并提醒用户可以直接在浏览器中打开查看，原url也要展示出来。";
 
     public TourApp(ChatModel dashscopeChatModel,
-                   @Qualifier("mySQLChatMemory") ChatMemory chatMemory) {
+                   @Qualifier("mySQLChatMemory") ChatMemory chatMemory,
+                   ToolConfig toolConfig) {
         chatClient = ChatClient.builder(dashscopeChatModel)
                 .defaultSystem(SYSTEM_PROMPT)
                 .defaultAdvisors(
                         MessageChatMemoryAdvisor.builder(chatMemory).build(),
                         new MyLoggerAdvisor()
                 )
-                .defaultToolNames("generateImage")
+                .defaultTools(toolConfig)
                 .build();
     }
 
@@ -72,5 +82,19 @@ public class TourApp {
                 .entity(TourReport.class);
         log.info("tourReport:{}", tourReport);
         return tourReport;
+    }
+
+    public String doChatWithRag(String message, String chatId) {
+        ChatResponse chatresponse = chatClient
+                .prompt()
+                .user(message)
+                .advisors(spec -> spec.param(CONVERSATION_ID,chatId))
+                .advisors(new MyLoggerAdvisor())
+                .advisors(QuestionAnswerAdvisor.builder(tourappVectorStore).build())
+                .call()
+                .chatResponse();
+        String content = chatresponse.getResult().getOutput().getText();
+        log.info("content:{}", content);
+        return content;
     }
 }
