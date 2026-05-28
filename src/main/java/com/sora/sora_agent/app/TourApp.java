@@ -4,6 +4,9 @@ import com.alibaba.cloud.ai.agent.Agent;
 import com.alibaba.cloud.ai.dashscope.spec.DashScopeModel;
 import com.sora.sora_agent.advisor.MyLoggerAdvisor;
 import com.sora.sora_agent.config.ToolConfig;
+import com.sora.sora_agent.rag.QueryRewriter;
+import com.sora.sora_agent.tool.ExaWebSearchTool;
+import com.sora.sora_agent.rag.TourAppRagCustomAdvisorFactory;
 import com.sora.sora_agent.rag.TourAppVectorStoreConfig;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +32,8 @@ public class TourApp {
 
     @Resource
     private VectorStore tourappVectorStore;
+    @Resource
+    private QueryRewriter queryRewriter;
 
     private static final String SYSTEM_PROMPT = "角色: "
             + "你是小途, 一位资深、温暖、极度细心的私人旅行规划专家。"
@@ -39,24 +44,28 @@ public class TourApp {
             + "当用户说帮我生成一张xx图片时, 你会调用 generateImage 工具来创作图片。"
             + "拿到图片URL后, 将其转换为可查看的代理链接展示给用户: "
             + "http://localhost:8080/api/image/proxy?url={URL}, "
-            + "并提醒用户可以直接在浏览器中打开查看，原url也要展示出来。";
+            + "并提醒用户可以直接在浏览器中打开查看，原url也要展示出来。"
+            + "[新增能力] 你可以调用 Exa 搜索引擎进行联网搜索(search工具), "
+            + "获取最新新闻、实时天气、近期活动、节庆日期、门票价格等实时信息。"
+            + "当用户询问需要联网查询的内容时, 主动调用 search 获取准确信息。";
 
     public TourApp(ChatModel dashscopeChatModel,
                    @Qualifier("mySQLChatMemory") ChatMemory chatMemory,
-                   ToolConfig toolConfig) {
+                   ToolConfig toolConfig,
+                   ExaWebSearchTool exaWebSearchTool) {
         chatClient = ChatClient.builder(dashscopeChatModel)
                 .defaultSystem(SYSTEM_PROMPT)
                 .defaultAdvisors(
                         MessageChatMemoryAdvisor.builder(chatMemory).build(),
                         new MyLoggerAdvisor()
                 )
-                .defaultTools(toolConfig)
+                .defaultTools(toolConfig, exaWebSearchTool)
                 .build();
     }
 
     /**
      * 调用chatClient对象, 传入用户prompt, 给advisor指定对话id
-     * 使用的是阿里云百炼的agent，自带一个知识库
+     * 使用的是阿里云百炼的agent，自带一个知识库，可在配置注释掉app-id恢复普通调用
      */
     public String doChat(String message, String chatId) {
         ChatResponse response = chatClient
@@ -89,12 +98,17 @@ public class TourApp {
      * 本地知识库，存储在PGvector
      */
     public String doChatWithRag(String message, String chatId) {
+
+        //应用查询重写
+        String rewrittenMessage = queryRewriter.doQueryRewrite(message);
         ChatResponse chatresponse = chatClient
                 .prompt()
-                .user(message)
+                .user(rewrittenMessage)
                 .advisors(spec -> spec.param(CONVERSATION_ID,chatId))
-                .advisors(new MyLoggerAdvisor())
+//                .advisors(new MyLoggerAdvisor())
                 .advisors(QuestionAnswerAdvisor.builder(tourappVectorStore).build())
+                //应用检索器：管理相似度阈值，召回片段数，文档过滤
+//                .advisors(TourAppRagCustomAdvisorFactory.createTourAppRagCustomAdvisor(tourappVectorStore,"weather"))
                 .call()
                 .chatResponse();
         String content = chatresponse.getResult().getOutput().getText();
