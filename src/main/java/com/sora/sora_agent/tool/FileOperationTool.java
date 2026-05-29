@@ -5,6 +5,9 @@ import com.sora.sora_agent.constant.FileConstant;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
+/**
+ * 文件操作工具，支持读取，写入文件
+ */
 public class FileOperationTool {
 
     private final String FILE_DIR = FileConstant.FILE_SAVE_DIR + "/file";
