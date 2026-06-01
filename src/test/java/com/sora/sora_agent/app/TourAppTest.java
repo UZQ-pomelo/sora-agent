@@ -105,5 +105,22 @@ class TourAppTest {
         Assertions.assertNotNull(answer);
     }
 
+    @Test
+    void doChatWithMcp() {
+        String chatId = UUID.randomUUID().toString();
+        // 测试地图 MCP
+        String message = "我的另一半居住在广州白云，请帮我找到 5 公里内合适的旅游约会地点";
+        String answer =  tourapp.doChatWithMcp(message, chatId);
+    }
+
+    @Test
+    void doChatWithMcpServer() {
+        String chatId = UUID.randomUUID().toString();
+        // 测试图片搜索 MCP
+        String message = "帮我搜索一些旅游路上会有的花草树木图片，并给我提供他们的url";
+        String answer = tourapp.doChatWithMcp(message, chatId);
+        Assertions.assertNotNull(answer);
+    }
+
 }
 

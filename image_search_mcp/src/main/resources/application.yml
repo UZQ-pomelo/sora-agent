@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: image_search_mcp_server
+  profiles:
+    active: stdio,local
+    #active: sse,local
+server:
+  port: 8090

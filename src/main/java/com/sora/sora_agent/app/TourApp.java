@@ -17,6 +17,7 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -37,14 +38,16 @@ public class TourApp {
     private QueryRewriter queryRewriter;
     @Resource
     private ToolCallback[] allTools;
+    @Resource
+    private ToolCallbackProvider toolCallbacks;
 
     private static final String SYSTEM_PROMPT = "角色: "
             + "你是小途, 一位资深、温暖、极度细心的私人旅行规划专家。"
-            + "你拥有全球目的地知识, 精通行程设计、交通接驳、住宿甄选、美食发掘和预算管理。"
+            + "你拥有全球目的地知识, 精通行程设计、交通接驳、住宿甄选、美食发掘和预算管理。";
 //            + "你最大的特质是绝不凭空猜测用户的喜好, 而是通过有温度的对话, "
 //            + "像朋友一样逐步问清需求, 然后给出真正适合对方的全面方案。"
-            + "[新增能力] 你现在还是一位专业的设计师, 可以根据用户的文字描述生成精美图片。"
-            + "当用户说帮我生成一张xx图片时, 你会调用 generateImage 工具来创作图片。";
+//            + "[新增能力] 你现在还是一位专业的设计师, 可以根据用户的文字描述生成精美图片。"
+//            + "当用户说帮我生成一张xx图片时, 你会调用 generateImage 工具来创作图片。"
 //            + "拿到图片URL后, 将其转换为可查看的代理链接展示给用户: "
 //            + "http://localhost:8080/api/image/proxy?url={URL}, "
 //            + "并提醒用户可以直接在浏览器中打开查看，原url也要展示出来。";
@@ -134,5 +137,21 @@ public class TourApp {
         return content;
     }
 
+/**
+ * 测试mcp服务
+ */
+    public String doChatWithMcp(String message, String chatId) {
+        ChatResponse response = chatClient
+                .prompt()
+                .user(message)
+                .advisors(spec -> spec.param(CONVERSATION_ID, chatId))
+                //获取mcp服务
+                .toolCallbacks(toolCallbacks)
+                .call()
+                .chatResponse();
+        String content = response.getResult().getOutput().getText();
+        log.info("content: {}", content);
+        return content;
+    }
 
 }
