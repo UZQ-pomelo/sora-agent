@@ -113,22 +113,12 @@ public class BaseResponse<T> implements Serializable {
 
     /**
      * 通过 BaseException 构建错误响应。
-     * <p>
-     * 会尝试将异常中的 code 字段解析为 int 型业务错误码，解析失败时
-     * 回退为 {@link ErrorCode#SYSTEM_ERROR}。
-     * </p>
      *
      * @param e   BaseException 或其子类实例
      * @param <T> 数据类型
      * @return 错误响应
      */
     public static <T> BaseResponse<T> error(BaseException e) {
-        int code;
-        try {
-            code = Integer.parseInt(e.getCode());
-        } catch (NumberFormatException ex) {
-            code = ErrorCode.SYSTEM_ERROR.getCode();
-        }
-        return error(code, e.getMessage());
+        return error(e.getCode(), e.getMessage());
     }
 }

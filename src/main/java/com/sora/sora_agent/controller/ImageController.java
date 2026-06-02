@@ -18,6 +18,7 @@ import java.net.URI;
  * 通过本地代理接口可直接在浏览器中打开查看。
  * </p>
  */
+@Deprecated
 @Slf4j
 @RestController
 @RequestMapping("/image")

@@ -38,27 +38,6 @@ public class ParamException extends BaseException {
         super(errorCode, message, cause);
     }
 
-    /**
-     * 使用自定义 code 和 message 构造。
-     *
-     * @param code    自定义错误码
-     * @param message 错误消息
-     */
-    public ParamException(String code, String message) {
-        super(code, message);
-    }
-
-    /**
-     * 使用自定义 code、message 及原始异常构造。
-     *
-     * @param code    自定义错误码
-     * @param message 错误消息
-     * @param cause   原始异常
-     */
-    public ParamException(String code, String message, Throwable cause) {
-        super(code, message, DEFAULT_HTTP_STATUS, cause);
-    }
-
     @Override
     protected int defaultHttpStatus() {
         return DEFAULT_HTTP_STATUS;
