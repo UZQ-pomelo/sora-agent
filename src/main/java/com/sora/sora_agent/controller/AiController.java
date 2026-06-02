@@ -1,19 +1,24 @@
 package com.sora.sora_agent.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sora.sora_agent.app.TourApp;
+import com.sora.sora_agent.common.BaseResponse;
+import com.sora.sora_agent.common.ThrowUtils;
+import com.sora.sora_agent.exception.GlobalExceptionHandler;
 import jakarta.annotation.Resource;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.tool.ToolCallback;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 
 import java.io.IOException;
 
+@Slf4j
 @RestController
 @RequestMapping("/ai")
 public class AiController {
@@ -22,32 +27,37 @@ public class AiController {
     private TourApp tourApp;
 
     @Resource
-    private ToolCallback[] allTools;
-
-    @Resource
-    private ChatModel dashscopeChatModel;
+    private ObjectMapper objectMapper;
 
     /**
-     * 同步接口
+     * 同步接口，返回统一响应格式。
      */
     @GetMapping("/tour_app/chat/sync")
-    public String doChatWithTourAppSync(String message, String chatId) {
-        return tourApp.doChat(message, chatId);
+    public BaseResponse<String> doChatWithTourAppSync(
+            @RequestParam String message,
+            @RequestParam(required = false) String chatId) {
+        ThrowUtils.throwParamIf(message == null || message.isBlank(), "消息不能为空");
+        String result = tourApp.doChat(message, chatId);
+        return BaseResponse.success(result);
     }
 
     /**
-     * SSE流式接口，Flux响应式对象，添加SSE对应MediaType
+     * SSE 流式接口，Flux 响应式对象，添加 SSE 对应 MediaType。
      */
     @GetMapping(value = "/tour_app/chat/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> doChatWithTourAppSSE(String message, String chatId) {
+    public Flux<String> doChatWithTourAppSSE(
+            @RequestParam String message,
+            @RequestParam(required = false) String chatId) {
         return tourApp.doChatByStream(message, chatId);
     }
 
     /**
-     * SSE流式接口，泛型指定为ServerSentEvent的实现
+     * SSE 流式接口，泛型指定为 ServerSentEvent 的实现。
      */
     @GetMapping(value = "/tour_app/chat/server")
-    public Flux<ServerSentEvent<String>> doChatWithTourAppServer(String message, String chatId) {
+    public Flux<ServerSentEvent<String>> doChatWithTourAppServer(
+            @RequestParam String message,
+            @RequestParam(required = false) String chatId) {
         return tourApp.doChatByStream(message, chatId)
                 .map(chunk -> ServerSentEvent.<String>builder()
                         .data(chunk)
@@ -55,16 +65,20 @@ public class AiController {
     }
 
     /**
-     * SSE流式接口，使用SSE Emitter实现
+     * SSE 流式接口，使用 SSE Emitter 实现。
+     * <p>
+     * 流内异常通过发送一条 {@code error} 事件（包含统一错误响应 JSON）告知客户端，
+     * 随后正常关闭连接。
+     * </p>
      */
     @GetMapping("/tour_app/chat/sse/emitter")
-    public SseEmitter doChatWithTourAppSseEmitter(String message, String chatId) {
-        // 创建一个超时时间较长的 SseEmitter
-        SseEmitter emitter = new SseEmitter(180000L); // 3分钟超时
-        // 获取 Flux 数据流并直接订阅
+    public SseEmitter doChatWithTourAppSseEmitter(
+            @RequestParam String message,
+            @RequestParam(required = false) String chatId) {
+        SseEmitter emitter = new SseEmitter(180000L);
+
         tourApp.doChatByStream(message, chatId)
                 .subscribe(
-                        // 处理每条消息
                         chunk -> {
                             try {
                                 emitter.send(chunk);
@@ -72,13 +86,20 @@ public class AiController {
                                 emitter.completeWithError(e);
                             }
                         },
-                        // 处理错误
-                        emitter::completeWithError,
-                        // 处理完成
+                        error -> {
+                            // 将异常转为统一错误响应 JSON，通过 error 事件发送
+                            BaseResponse<?> errorResp = GlobalExceptionHandler.buildErrorResponse(error);
+                            try {
+                                String json = objectMapper.writeValueAsString(errorResp);
+                                emitter.send(SseEmitter.event().name("error").data(json));
+                            } catch (IOException e) {
+                                log.error("SSE 错误响应序列化失败", e);
+                            }
+                            emitter.complete();
+                        },
                         emitter::complete
                 );
-        // 返回emitter
+
         return emitter;
     }
-
 }
