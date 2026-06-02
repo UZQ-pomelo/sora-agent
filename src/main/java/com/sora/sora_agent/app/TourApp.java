@@ -21,6 +21,7 @@ import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -137,9 +138,9 @@ public class TourApp {
         return content;
     }
 
-/**
- * 测试mcp服务
- */
+    /**
+     * 测试mcp服务
+    */
     public String doChatWithMcp(String message, String chatId) {
         ChatResponse response = chatClient
                 .prompt()
@@ -152,6 +153,18 @@ public class TourApp {
         String content = response.getResult().getOutput().getText();
         log.info("content: {}", content);
         return content;
+    }
+
+    /**
+     * 流式调用
+     */
+    public Flux<String> doChatByStream(String message, String chatId) {
+        return chatClient
+                .prompt()
+                .user(message)
+                .advisors(spec -> spec.param(CONVERSATION_ID, chatId))
+                .stream()
+                .content();
     }
 
 }
