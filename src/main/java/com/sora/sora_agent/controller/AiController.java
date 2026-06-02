@@ -1,12 +1,16 @@
 package com.sora.sora_agent.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sora.sora_agent.agent.SoraManus;
 import com.sora.sora_agent.app.TourApp;
 import com.sora.sora_agent.common.BaseResponse;
 import com.sora.sora_agent.common.ThrowUtils;
 import com.sora.sora_agent.exception.GlobalExceptionHandler;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -102,4 +106,26 @@ public class AiController {
 
         return emitter;
     }
+
+    @Resource
+    private ToolCallback[] allTools;
+
+    @Resource
+    private ChatModel dashscopeChatModel;
+
+    @Resource
+    private ToolCallbackProvider toolCallbacks;
+
+    /**
+     * 流式调用 Manus 超级智能体
+     *
+     * @param message
+     * @return
+     */
+    @GetMapping("/manus/chat")
+    public SseEmitter doChatWithManus(String message) {
+        SoraManus soraManus = new SoraManus(allTools, toolCallbacks, dashscopeChatModel);
+        return soraManus.runStream(message);
+    }
+
 }
