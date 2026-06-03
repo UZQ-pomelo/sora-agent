@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import MarkdownIt from 'markdown-it'
-import type { ChatMessage } from '@/types/chat'
+import type { ChatMessage, AgentState } from '@/types/chat'
 
 const props = defineProps<{
   message: ChatMessage
   isStreaming: boolean
+  agentState?: AgentState | null
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +32,20 @@ const renderedContent = computed(() => {
 
 const isUser = computed(() => props.message.role === 'user')
 const hasContent = computed(() => props.message.content.length > 0)
+
+const statusLabel = computed(() => {
+  if (!props.agentState || props.isStreaming) return null
+  switch (props.agentState) {
+    case 'FINISHED':
+      return { icon: '✅', text: '任务完成', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' }
+    case 'STUCK':
+      return { icon: '⚠️', text: '任务因检测到死循环而终止', color: 'text-amber-600 bg-amber-50 border-amber-200' }
+    case 'ERROR':
+      return { icon: '❌', text: '执行出错', color: 'text-red-600 bg-red-50 border-red-200' }
+    default:
+      return null
+  }
+})
 
 function onCopy() {
   emit('copy', props.message.content)
@@ -171,6 +186,18 @@ const formattedTime = computed(() => {
           </svg>
           <span>{{ copied ? '已复制' : '复制' }}</span>
         </button>
+      </div>
+
+      <!-- Agent status badge (shown after streaming completes) -->
+      <div
+        v-if="statusLabel"
+        :class="[
+          'mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-opacity duration-300',
+          statusLabel.color,
+        ]"
+      >
+        <span>{{ statusLabel.icon }}</span>
+        <span>{{ statusLabel.text }}</span>
       </div>
     </div>
 

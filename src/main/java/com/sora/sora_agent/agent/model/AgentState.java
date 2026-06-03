@@ -23,6 +23,11 @@ public enum AgentState {
     /**
      * 错误状态
      */
-    ERROR
+    ERROR,
+
+    /**
+     * 陷入死循环状态（检测到重复/振荡模式后强制终止）
+     */
+    STUCK
 }
 

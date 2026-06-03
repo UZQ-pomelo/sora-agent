@@ -8,7 +8,7 @@
 import type { SSEOptions } from '@/types/chat'
 
 export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
-  const { url, onMessage, onError, onComplete, onOpen } = opts
+  const { url, onMessage, onError, onComplete, onOpen, onAgentState } = opts
 
   const controller = new AbortController()
   let aborted = false
@@ -79,6 +79,19 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
           const data = dataLines.join('\n')
 
           if (!data) continue
+
+          // 处理 agent_state 命名事件（后端 Agent 终止状态）
+          if (eventType === 'agent_state') {
+            try {
+              const parsed = JSON.parse(data)
+              if (parsed.state) {
+                onAgentState?.(parsed.state)
+              }
+            } catch {
+              // 解析失败则忽略，不影响主流程
+            }
+            continue
+          }
 
           // 处理命名事件
           if (eventType === 'error') {

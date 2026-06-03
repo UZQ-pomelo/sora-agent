@@ -37,6 +37,11 @@ public abstract class BaseAgent {
     private int maxSteps = 10;
     private int currentStep = 0;
 
+    // 死循环检测
+    private int duplicateThreshold = 2;
+    private int stuckCount = 0;
+    private int maxStuckCount = 2;
+
     // LLM
     private ChatClient chatClient;
 
@@ -63,7 +68,7 @@ public abstract class BaseAgent {
         // 保存结果列表
         List<String> results = new ArrayList<>();
         try {
-            for (int i = 0; i < maxSteps && state != AgentState.FINISHED; i++) {
+            for (int i = 0; i < maxSteps && state == AgentState.RUNNING; i++) {
                 int stepNumber = i + 1;
                 currentStep = stepNumber;
                 log.info("执行步骤 " + stepNumber + "/" + maxSteps);
@@ -71,11 +76,24 @@ public abstract class BaseAgent {
                 String stepResult = step();
                 String result = "Step " + stepNumber + ": " + stepResult;
                 results.add(result);
+
+                // 每步执行后检查是否陷入死循环
+                if (isStuck()) {
+                    stuckCount++;
+                    log.warn("检测到死循环迹象，stuckCount=" + stuckCount + "/" + maxStuckCount);
+                    if (stuckCount >= maxStuckCount) {
+                        state = AgentState.STUCK;
+                        results.add("终止：检测到死循环，已强制停止");
+                        break;
+                    }
+                    handleStuckState();
+                    results.add("⚠️ 检测到重复模式，已调整策略继续执行...");
+                }
             }
-            // 检查是否超出步骤限制
-            if (currentStep >= maxSteps) {
+            // 检查是否超出步骤限制（仅在仍为 RUNNING 状态时）
+            if (state == AgentState.RUNNING && currentStep >= maxSteps) {
                 state = AgentState.FINISHED;
-                results.add("终止： 已达到最大执行次数上限 (" + maxSteps + ")");
+                results.add("终止：已达到最大执行次数上限 (" + maxSteps + ")");
             }
             return String.join("\n", results);
         } catch (Exception e) {
@@ -118,7 +136,7 @@ public abstract class BaseAgent {
                 messageList.add(new UserMessage(userPrompt));
 
                 try {
-                    for (int i = 0; i < maxSteps && state != AgentState.FINISHED; i++) {
+                    for (int i = 0; i < maxSteps && state == AgentState.RUNNING; i++) {
                         int stepNumber = i + 1;
                         currentStep = stepNumber;
                         log.info("Executing step " + stepNumber + "/" + maxSteps);
@@ -129,12 +147,29 @@ public abstract class BaseAgent {
 
                         // 发送每一步的结果
                         emitter.send(result);
+
+                        // 每步执行后检查是否陷入死循环
+                        if (isStuck()) {
+                            stuckCount++;
+                            log.warn("检测到死循环迹象，stuckCount=" + stuckCount + "/" + maxStuckCount);
+                            if (stuckCount >= maxStuckCount) {
+                                state = AgentState.STUCK;
+                                emitter.send("终止：检测到死循环，已强制停止");
+                                break;
+                            }
+                            handleStuckState();
+                            emitter.send("⚠️ 检测到重复模式，已调整策略继续执行...");
+                        }
                     }
-                    // 检查是否超出步骤限制
-                    if (currentStep >= maxSteps) {
+                    // 检查是否超出步骤限制（仅在仍为 RUNNING 状态时）
+                    if (state == AgentState.RUNNING && currentStep >= maxSteps) {
                         state = AgentState.FINISHED;
                         emitter.send("执行结束: 达到最大步骤 (" + maxSteps + ")");
                     }
+                    // 发送最终 agent 状态事件给前端
+                    emitter.send(SseEmitter.event()
+                            .name("agent_state")
+                            .data("{\"state\":\"" + state.name() + "\"}"));
                     // 正常完成
                     emitter.complete();
                 } catch (Exception e) {
@@ -142,6 +177,9 @@ public abstract class BaseAgent {
                     log.error("执行智能体失败", e);
                     try {
                         emitter.send("执行错误: " + e.getMessage());
+                        emitter.send(SseEmitter.event()
+                                .name("agent_state")
+                                .data("{\"state\":\"ERROR\"}"));
                         emitter.complete();
                     } catch (Exception ex) {
                         emitter.completeWithError(ex);
@@ -182,9 +220,78 @@ public abstract class BaseAgent {
     public abstract String step();
 
     /**
+     * 检查代理是否陷入死循环（基于文本重复检测）。
+     * 子类可重写以加入更精细的检测逻辑。
+     *
+     * @return 是否陷入循环
+     */
+    protected boolean isStuck() {
+        if (messageList.size() < 2) {
+            return false;
+        }
+
+        // 获取最后一条消息的内容
+        Message lastMessage = messageList.get(messageList.size() - 1);
+
+        // 从消息中提取文本内容进行比对
+        String lastContent = extractMessageContent(lastMessage);
+        if (lastContent == null || lastContent.isEmpty()) {
+            return false;
+        }
+
+        // 计算之前消息中相同内容出现的次数
+        int duplicateCount = 0;
+        for (int i = messageList.size() - 2; i >= 0; i--) {
+            Message msg = messageList.get(i);
+            String content = extractMessageContent(msg);
+            if (content != null && content.equals(lastContent)) {
+                duplicateCount++;
+            }
+        }
+
+        return duplicateCount >= this.duplicateThreshold;
+    }
+
+    /**
+     * 从消息中提取文本内容，用于重复检测比对。
+     * 支持 AssistantMessage、UserMessage 等常见类型。
+     */
+    private String extractMessageContent(Message message) {
+        if (message == null) {
+            return null;
+        }
+        // 优先使用 Spring AI Message 接口的 getText() 方法
+        if (message instanceof org.springframework.ai.chat.messages.AssistantMessage assistantMsg) {
+            return assistantMsg.getText();
+        }
+        if (message instanceof org.springframework.ai.chat.messages.UserMessage userMsg) {
+            return userMsg.getText();
+        }
+        // 兜底：尝试 getContent() 或 toString()
+        try {
+            String content = message.getText();
+            return content != null ? content : message.toString();
+        } catch (Exception e) {
+            return message.toString();
+        }
+    }
+
+    /**
+     * 处理陷入循环的状态 — 向 nextStepPrompt 注入提醒，
+     * 引导 Agent 跳出重复路径。
+     */
+    protected void handleStuckState() {
+        String stuckPrompt = "⚠️ 观察到重复响应。考虑新策略，避免重复已尝试过的无效路径。";
+        this.nextStepPrompt = stuckPrompt + "\n" + (this.nextStepPrompt != null ? this.nextStepPrompt : "");
+        log.warn("Agent detected stuck state. Added stuck prompt to nextStepPrompt.");
+    }
+
+    /**
      * 清理资源
      */
     protected void cleanup() {
+        // 重置死循环计数器，确保下次运行从零开始
+        this.stuckCount = 0;
         // 子类可以重写此方法来清理资源
     }
 }
