@@ -17,7 +17,11 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -39,6 +43,12 @@ public class ToolCallAgent extends ReActAgent {
 
     // 禁用内置的工具调用机制，自己维护上下文
     private final ChatOptions chatOptions;
+
+    // 工具调用历史（用于死循环检测）
+    private final List<String> toolCallHistory = new ArrayList<>();
+    private int consecutiveToolThreshold = 4;
+    private int oscillationWindowSize = 6;
+    private int oscillationMinOccurrences = 3;
 
     public ToolCallAgent(ToolCallback[] availableTools) {
         super();
@@ -127,9 +137,94 @@ public class ToolCallAgent extends ReActAgent {
         if (terminateToolCalled) {
             setState(AgentState.FINISHED);
         }
+
+        // 记录工具调用历史，用于死循环检测
+        toolResponseMessage.getResponses().forEach(response ->
+                toolCallHistory.add(response.name())
+        );
+
         log.info(results);
         return results;
 
+    }
+
+    /**
+     * 重写死循环检测，在文本重复检测基础上加入工具调用级别的检测：
+     * 1. 连续同工具检测 — 同一工具连续调用 ≥ consecutiveToolThreshold 次
+     * 2. 振荡检测 — 最近 oscillationWindowSize 步中仅出现 2 种工具，且各出现 ≥ oscillationMinOccurrences 次
+     *
+     * @return 是否陷入循环
+     */
+    @Override
+    protected boolean isStuck() {
+        // 先使用父类的文本重复检测
+        if (super.isStuck()) {
+            return true;
+        }
+
+        // 连续同工具检测
+        if (isConsecutiveSameTool()) {
+            log.warn(getName() + " 检测到连续同工具循环: " + toolCallHistory.get(toolCallHistory.size() - 1));
+            return true;
+        }
+
+        // 振荡模式检测
+        if (isOscillating()) {
+            log.warn(getName() + " 检测到工具调用振荡模式");
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 检测是否连续调用同一工具超过阈值。
+     */
+    private boolean isConsecutiveSameTool() {
+        if (toolCallHistory.size() < consecutiveToolThreshold) {
+            return false;
+        }
+
+        String lastTool = toolCallHistory.get(toolCallHistory.size() - 1);
+        for (int i = toolCallHistory.size() - 2; i >= toolCallHistory.size() - consecutiveToolThreshold; i--) {
+            if (!toolCallHistory.get(i).equals(lastTool)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 检测最近 N 步中是否仅出现 2 种工具，且每种出现 ≥ oscillationMinOccurrences 次。
+     */
+    private boolean isOscillating() {
+        if (toolCallHistory.size() < oscillationWindowSize) {
+            return false;
+        }
+
+        List<String> recent = toolCallHistory.subList(
+                toolCallHistory.size() - oscillationWindowSize,
+                toolCallHistory.size()
+        );
+
+        Set<String> uniqueTools = new HashSet<>(recent);
+        if (uniqueTools.size() != 2) {
+            return false;
+        }
+
+        // 窗口内仅 2 种工具，检查每种是否都出现 ≥ oscillationMinOccurrences 次
+        return uniqueTools.stream().allMatch(tool ->
+                Collections.frequency(recent, tool) >= oscillationMinOccurrences
+        );
+    }
+
+    /**
+     * 清理资源，包括工具调用历史。
+     */
+    @Override
+    protected void cleanup() {
+        super.cleanup();
+        this.toolCallHistory.clear();
     }
 
 }

@@ -3,7 +3,7 @@ import { ref, nextTick, watch, onBeforeUnmount, computed } from 'vue'
 import ChatBubble from './ChatBubble.vue'
 import ChatInput from './ChatInput.vue'
 import { createSSEConnection } from '@/utils/sse'
-import type { ChatMessage } from '@/types/chat'
+import type { ChatMessage, AgentState } from '@/types/chat'
 
 export interface ChatPageConfig {
   /** SSE URL builder: (message, chatId?) => full URL */
@@ -25,6 +25,7 @@ const messages = ref<ChatMessage[]>([])
 const chatId = ref<string>(crypto.randomUUID())
 const isStreaming = ref(false)
 const sseConnection = ref<{ abort: () => void } | null>(null)
+const agentState = ref<AgentState | null>(null)
 const messagesContainer = ref<HTMLElement | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 
@@ -58,6 +59,7 @@ function sendMessage(text: string) {
     timestamp: Date.now(),
   }
   messages.value.push(userMsg)
+  agentState.value = null  // 重置 Agent 状态，开始新一轮对话
 
   // Create placeholder assistant message (push then get reactive proxy)
   messages.value.push({
@@ -93,6 +95,9 @@ function sendMessage(text: string) {
     onComplete() {
       isStreaming.value = false
       sseConnection.value = null
+    },
+    onAgentState(state: AgentState) {
+      agentState.value = state
     },
   })
 
@@ -206,10 +211,11 @@ defineExpose({ newConversation })
       <!-- Message list -->
       <div v-else class="max-w-3xl mx-auto px-6 py-6">
         <ChatBubble
-          v-for="msg in messages"
+          v-for="(msg, idx) in messages"
           :key="msg.id"
           :message="msg"
           :is-streaming="isStreaming && msg === messages[messages.length - 1] && msg.role === 'assistant'"
+          :agent-state="(!isStreaming && idx === messages.length - 1 && msg.role === 'assistant') ? agentState : null"
           @copy="copyMessage"
         />
         <!-- Bottom spacer for comfortable scrolling -->
