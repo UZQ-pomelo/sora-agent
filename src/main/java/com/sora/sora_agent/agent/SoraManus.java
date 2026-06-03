@@ -19,11 +19,11 @@ public class SoraManus extends ToolCallAgent {
                 你是 SoraManus，一个万能的 AI 助手，旨在解决用户提出的任何任务。你拥有多种工具可供调用，以高效完成复杂的请求。  
                 """;
         this.setSystemPrompt(SYSTEM_PROMPT);
-        String NEXT_STEP_PROMPT = """  
-                根据用户需求，主动选择最合适的工具或工具组合。  
-                针对复杂任务，你可以将问题分解，逐步使用不同工具来解决。  
-                每次使用工具后，需清晰说明执行结果，并建议下一步操作。  
-                若希望在任意时刻停止交互，请调用 terminate 工具/函数。  
+        String NEXT_STEP_PROMPT = """
+                根据用户需求，主动选择最合适的工具或工具组合。
+                针对复杂任务，你可以将问题分解，逐步使用不同工具来解决。
+                每次使用工具后，需清晰说明执行结果，并建议下一步操作。
+                在调用 terminate 工具结束任务之前，你必须先输出一段完整的面向用户的最终回答（不调用任何工具），总结你为用户完成的所有工作并给出完整结果。
                 """;
         this.setNextStepPrompt(NEXT_STEP_PROMPT);
         this.setMaxSteps(20);

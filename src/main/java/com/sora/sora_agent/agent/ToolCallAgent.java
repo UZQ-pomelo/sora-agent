@@ -44,11 +44,14 @@ public class ToolCallAgent extends ReActAgent {
     // 禁用内置的工具调用机制，自己维护上下文
     private final ChatOptions chatOptions;
 
-    // 工具调用历史（用于死循环检测）
+    // 工具调用历史（用于死循环检测，格式：工具名::参数指纹）
     private final List<String> toolCallHistory = new ArrayList<>();
     private int consecutiveToolThreshold = 4;
     private int oscillationWindowSize = 6;
     private int oscillationMinOccurrences = 3;
+
+    // LLM 在调用工具时同时生成的用户文本（用于 terminate+文本同一响应的场景）
+    private String pendingAssistantText = null;
 
     public ToolCallAgent(ToolCallback[] availableTools) {
         super();
@@ -100,7 +103,8 @@ public class ToolCallAgent extends ReActAgent {
                 getMessageList().add(assistantMessage);
                 return false;
             } else {
-                // 需要调用工具时，无需记录助手消息，因为调用工具时会自动记录
+                // LLM 同时给出文本和工具调用 → 保存文本供 act() 使用
+                pendingAssistantText = assistantMessage.getText();
                 return true;
             }
         } catch (Exception e) {
@@ -128,24 +132,55 @@ public class ToolCallAgent extends ReActAgent {
         setMessageList(toolExecutionResult.conversationHistory());
         // 当前工具调用的结果
         ToolResponseMessage toolResponseMessage = (ToolResponseMessage) CollUtil.getLast(toolExecutionResult.conversationHistory());
+        // 返回简洁的进度提示（原始数据已在 messageList 中供 LLM 处理）
         String results = toolResponseMessage.getResponses().stream()
-                .map(response -> "工具 " + response.name() + " 完成了它的任务！结果: " + response.responseData())
+                .map(response -> formatToolProgress(response.name()))
                 .collect(Collectors.joining("\n"));
         // 判断是否调用了终止工具
         boolean terminateToolCalled = toolResponseMessage.getResponses().stream()
                 .anyMatch(response -> "doTerminate".equals(response.name()));
         if (terminateToolCalled) {
             setState(AgentState.FINISHED);
+            // 如果 LLM 在调用 terminate 时同时给出了用户文本，则直接返回文本
+            if (toolResponseMessage.getResponses().size() == 1
+                    && pendingAssistantText != null
+                    && !pendingAssistantText.isEmpty()) {
+                String text = pendingAssistantText;
+                pendingAssistantText = null;
+                log.info(results);
+                return text;
+            }
         }
+        // 非终止场景下清空待处理文本
+        pendingAssistantText = null;
 
-        // 记录工具调用历史，用于死循环检测
-        toolResponseMessage.getResponses().forEach(response ->
-                toolCallHistory.add(response.name())
-        );
+        // 记录工具调用历史（工具名+参数指纹），用于精确死循环检测
+        toolCallChatResponse.getResult().getOutput().getToolCalls().forEach(toolCall -> {
+            String fingerprint = generateParamFingerprint(toolCall.arguments());
+            toolCallHistory.add(toolCall.name() + "::" + fingerprint);
+        });
 
         log.info(results);
         return results;
 
+    }
+
+    /**
+     * 将工具名称映射为用户友好的进度提示文本。
+     */
+    private String formatToolProgress(String toolName) {
+        return switch (toolName) {
+            case "maps_geo" -> "📍 已查询地理位置";
+            case "maps_around_search" -> "🔍 已搜索周边信息";
+            case "maps_search_detail" -> "📋 已获取详细资料";
+            case "webSearch", "exaWebSearch" -> "🌐 已搜索网页信息";
+            case "webScraping" -> "📥 已抓取网页内容";
+            case "generatePDF" -> "📄 已生成 PDF 文档";
+            case "writeFile" -> "💾 已保存文件";
+            case "resourceDownload" -> "⬇️ 已下载资源";
+            case "doTerminate" -> "✅ 任务完成";
+            default -> "🔧 已执行工具: " + toolName;
+        };
     }
 
     /**
@@ -178,6 +213,14 @@ public class ToolCallAgent extends ReActAgent {
     }
 
     /**
+     * 根据工具调用参数生成短指纹，用于区分同一工具的不同参数调用。
+     */
+    private String generateParamFingerprint(String arguments) {
+        if (arguments == null || arguments.isEmpty()) return "no-args";
+        return Integer.toHexString(arguments.hashCode());
+    }
+
+    /**
      * 检测是否连续调用同一工具超过阈值。
      */
     private boolean isConsecutiveSameTool() {
@@ -195,7 +238,7 @@ public class ToolCallAgent extends ReActAgent {
     }
 
     /**
-     * 检测最近 N 步中是否仅出现 2 种工具，且每种出现 ≥ oscillationMinOccurrences 次。
+     * 检测最近 N 步中是否仅出现 2 种工具（按工具名去参），且每种出现 ≥ oscillationMinOccurrences 次。
      */
     private boolean isOscillating() {
         if (toolCallHistory.size() < oscillationWindowSize) {
@@ -207,14 +250,19 @@ public class ToolCallAgent extends ReActAgent {
                 toolCallHistory.size()
         );
 
-        Set<String> uniqueTools = new HashSet<>(recent);
+        // 提取工具名（去掉参数指纹）
+        List<String> toolNames = recent.stream()
+                .map(entry -> entry.split("::")[0])
+                .collect(Collectors.toList());
+
+        Set<String> uniqueTools = new HashSet<>(toolNames);
         if (uniqueTools.size() != 2) {
             return false;
         }
 
         // 窗口内仅 2 种工具，检查每种是否都出现 ≥ oscillationMinOccurrences 次
         return uniqueTools.stream().allMatch(tool ->
-                Collections.frequency(recent, tool) >= oscillationMinOccurrences
+                Collections.frequency(toolNames, tool) >= oscillationMinOccurrences
         );
     }
 
@@ -225,6 +273,7 @@ public class ToolCallAgent extends ReActAgent {
     protected void cleanup() {
         super.cleanup();
         this.toolCallHistory.clear();
+        this.pendingAssistantText = null;
     }
 
 }
