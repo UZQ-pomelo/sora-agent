@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onBeforeUnmount, computed } from 'vue'
+import { ref, nextTick, watch, onBeforeUnmount, computed, onMounted } from 'vue'
 import ChatBubble from './ChatBubble.vue'
 import ChatInput from './ChatInput.vue'
 import { createSSEConnection } from '@/utils/sse'
-import type { ChatMessage, AgentState } from '@/types/chat'
+import type { ChatMessage, AgentState, ModelOption, ModelInfo } from '@/types/chat'
 
 export interface ChatPageConfig {
-  /** SSE URL builder: (message, chatId?) => full URL */
-  buildUrl: (message: string, chatId?: string) => string
+  /** SSE URL builder: (message, chatId?, model?) => full URL */
+  buildUrl: (message: string, chatId?: string, model?: string) => string
   /** Whether to include chatId parameter */
   useChatId: boolean
   /** Page title */
@@ -19,6 +19,30 @@ export interface ChatPageConfig {
 const props = defineProps<{
   config: ChatPageConfig
 }>()
+
+// --- Model state ---
+const selectedModel = ref<string>('')
+const availableModels = ref<ModelOption[]>([])
+const currentModelInfo = ref<ModelInfo | null>(null)
+
+async function fetchModels() {
+  try {
+    const resp = await fetch('/api/ai/models')
+    const json = await resp.json()
+    if (json?.data) {
+      availableModels.value = json.data.models || []
+      selectedModel.value = json.data.default || ''
+    }
+  } catch {
+    // 降级：硬编码默认值
+    console.warn('无法获取模型列表，使用默认')
+  }
+}
+
+function onModelSelect(modelName: string) {
+  selectedModel.value = modelName
+  currentModelInfo.value = null
+}
 
 // --- State ---
 const messages = ref<ChatMessage[]>([])
@@ -44,7 +68,6 @@ function scrollToBottom(smooth = true) {
   })
 }
 
-// Watch messages for auto-scroll
 watch(messages, () => scrollToBottom(), { deep: true })
 
 // --- SSE ---
@@ -59,26 +82,25 @@ function sendMessage(text: string) {
     timestamp: Date.now(),
   }
   messages.value.push(userMsg)
-  agentState.value = null  // 重置 Agent 状态，开始新一轮对话
+  agentState.value = null
+  currentModelInfo.value = null
 
-  // Create placeholder assistant message (push then get reactive proxy)
+  // Create placeholder assistant message
   messages.value.push({
     id: crypto.randomUUID(),
     role: 'assistant',
     content: '',
     timestamp: Date.now(),
   })
-  // 必须拿到 Vue 的 Proxy 引用再修改，直接改原始对象会绕过响应式
   const reactiveMsg = messages.value[messages.value.length - 1]
 
   isStreaming.value = true
 
-  // Build URL
+  // Build URL with model param
   const url = props.config.useChatId
-    ? props.config.buildUrl(encodeURIComponent(text), chatId.value)
-    : props.config.buildUrl(encodeURIComponent(text))
+    ? props.config.buildUrl(encodeURIComponent(text), chatId.value, selectedModel.value)
+    : props.config.buildUrl(encodeURIComponent(text), undefined, selectedModel.value)
 
-  // Create SSE connection
   const es = createSSEConnection({
     url,
     onMessage(chunk: string) {
@@ -86,7 +108,6 @@ function sendMessage(text: string) {
     },
     onError(error: string) {
       if (error.startsWith('⚠️')) {
-        // Append error to content if it's a reconnection notice
         if (!reactiveMsg.content) {
           reactiveMsg.content = error
         }
@@ -98,6 +119,9 @@ function sendMessage(text: string) {
     },
     onAgentState(state: AgentState) {
       agentState.value = state
+    },
+    onModelInfo(info: ModelInfo) {
+      currentModelInfo.value = info
     },
   })
 
@@ -118,6 +142,7 @@ function newConversation() {
   }
   messages.value = []
   chatId.value = crypto.randomUUID()
+  currentModelInfo.value = null
 }
 
 function copyMessage(content: string) {
@@ -125,6 +150,10 @@ function copyMessage(content: string) {
 }
 
 // --- Lifecycle ---
+onMounted(() => {
+  fetchModels()
+})
+
 onBeforeUnmount(() => {
   if (sseConnection.value) {
     sseConnection.value.abort()
@@ -164,19 +193,40 @@ defineExpose({ newConversation })
           </div>
         </div>
 
-        <!-- New conversation button -->
-        <button
-          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
-                 text-warm-500 hover:text-accent-600 hover:bg-accent-50
-                 rounded-lg transition-colors duration-150 shrink-0"
-          @click="newConversation"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-          <span>新建对话</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <!-- Model selector -->
+          <select
+            v-model="selectedModel"
+            @change="onModelSelect(($event.target as HTMLSelectElement).value)"
+            class="text-xs bg-warm-50 border border-warm-200 rounded-lg px-2.5 py-1.5
+                   text-warm-600 focus:outline-none focus:border-accent-300 focus:ring-1
+                   focus:ring-accent-100 transition-colors cursor-pointer
+                   hover:border-warm-300"
+            title="选择模型"
+          >
+            <option
+              v-for="m in availableModels"
+              :key="m.name"
+              :value="m.name"
+            >
+              {{ m.display }}
+            </option>
+          </select>
+
+          <!-- New conversation button -->
+          <button
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
+                   text-warm-500 hover:text-accent-600 hover:bg-accent-50
+                   rounded-lg transition-colors duration-150 shrink-0"
+            @click="newConversation"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            <span>新建对话</span>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -216,6 +266,7 @@ defineExpose({ newConversation })
           :message="msg"
           :is-streaming="isStreaming && msg === messages[messages.length - 1] && msg.role === 'assistant'"
           :agent-state="(!isStreaming && idx === messages.length - 1 && msg.role === 'assistant') ? agentState : null"
+          :model-info="(idx === messages.length - 1 && msg.role === 'assistant') ? currentModelInfo : null"
           @copy="copyMessage"
         />
         <!-- Bottom spacer for comfortable scrolling -->

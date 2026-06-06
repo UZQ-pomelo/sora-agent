@@ -5,7 +5,12 @@ import com.sora.sora_agent.agent.SoraManus;
 import com.sora.sora_agent.app.TourApp;
 import com.sora.sora_agent.common.BaseResponse;
 import com.sora.sora_agent.common.ThrowUtils;
+import com.sora.sora_agent.config.ModelConfig;
 import com.sora.sora_agent.exception.GlobalExceptionHandler;
+import com.sora.sora_agent.service.ModelFallbackService;
+import com.sora.sora_agent.service.ModelFallbackService.AllModelsFailedException;
+import com.sora.sora_agent.service.ModelFallbackService.ModelAttempt;
+import com.sora.sora_agent.service.ModelFallbackService.StreamModelResult;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -21,6 +26,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 
 import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @RestController
@@ -33,65 +40,123 @@ public class AiController {
     @Resource
     private ObjectMapper objectMapper;
 
+    @Resource
+    private ModelConfig modelConfig;
+
+    @Resource
+    private ModelFallbackService modelFallbackService;
+
+    /**
+     * 获取可用模型列表。
+     */
+    @GetMapping("/models")
+    public BaseResponse<Map<String, Object>> getModels() {
+        List<Map<String, String>> models = modelConfig.getAvailable().stream()
+                .map(e -> {
+                    Map<String, String> m = new java.util.HashMap<>();
+                    m.put("name", e.getName());
+                    m.put("display", e.getDisplay());
+                    return m;
+                })
+                .toList();
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("models", models);
+        data.put("default", modelConfig.getDefaultModel());
+        return BaseResponse.success(data);
+    }
+
     /**
      * 同步接口，返回统一响应格式。
      */
     @GetMapping("/tour_app/chat/sync")
     public BaseResponse<String> doChatWithTourAppSync(
             @RequestParam String message,
-            @RequestParam(required = false) String chatId) {
+            @RequestParam(required = false) String chatId,
+            @RequestParam(required = false) String model) {
         ThrowUtils.throwParamIf(message == null || message.isBlank(), "消息不能为空");
-        String result = tourApp.doChat(message, chatId);
+        String result = tourApp.doChat(message, chatId, model);
         return BaseResponse.success(result);
     }
 
     /**
-     * SSE 流式接口，Flux 响应式对象，添加 SSE 对应 MediaType。
+     * SSE 流式接口，Flux 响应式对象。
      */
     @GetMapping(value = "/tour_app/chat/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> doChatWithTourAppSSE(
             @RequestParam String message,
-            @RequestParam(required = false) String chatId) {
-        return tourApp.doChatByStream(message, chatId);
+            @RequestParam(required = false) String chatId,
+            @RequestParam(required = false) String model) {
+        return tourApp.doChatByStream(message, chatId, model);
     }
 
     /**
      * SSE 流式接口，泛型指定为 ServerSentEvent 的实现。
+     * 开头注入 model_info 命名事件。
      */
-    @GetMapping(value = "/tour_app/chat/server")
+    @GetMapping(value = "/tour_app/chat/server", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> doChatWithTourAppServer(
             @RequestParam String message,
-            @RequestParam(required = false) String chatId) {
-        return tourApp.doChatByStream(message, chatId)
+            @RequestParam(required = false) String chatId,
+            @RequestParam(required = false) String model) {
+        StreamModelResult result = tourApp.doChatByStreamWithInfo(message, chatId, model);
+
+        // 构建 model_info ServerSentEvent
+        ModelFallbackService.ModelInvokeInfo info = result.info();
+        ServerSentEvent<String> modelInfoEvent = ServerSentEvent.<String>builder()
+                .event("model_info")
+                .data(toModelInfoJson(info))
+                .build();
+
+        // 将 model_info 事件排在流开头
+        Flux<ServerSentEvent<String>> modelInfoFlux = Flux.just(modelInfoEvent);
+        Flux<ServerSentEvent<String>> chatFlux = result.stream()
+                .skip(1) // 跳过 ModelFallbackService 注入的原始 model_info
                 .map(chunk -> ServerSentEvent.<String>builder()
                         .data(chunk)
                         .build());
+
+        return Flux.concat(modelInfoFlux, chatFlux);
     }
 
     /**
      * SSE 流式接口，使用 SSE Emitter 实现。
-     * <p>
-     * 流内异常通过发送一条 {@code error} 事件（包含统一错误响应 JSON）告知客户端，
-     * 随后正常关闭连接。
-     * </p>
+     *
+     * <p>首先发送 model_info 命名事件，然后逐 chunk 转发聊天流。</p>
      */
     @GetMapping("/tour_app/chat/sse/emitter")
     public SseEmitter doChatWithTourAppSseEmitter(
             @RequestParam String message,
-            @RequestParam(required = false) String chatId) {
-        SseEmitter emitter = new SseEmitter(180000L);
+            @RequestParam(required = false) String chatId,
+            @RequestParam(required = false) String model) {
+        SseEmitter emitter = new SseEmitter(300000L);
 
-        tourApp.doChatByStream(message, chatId)
+        StreamModelResult result = tourApp.doChatByStreamWithInfo(message, chatId, model);
+        ModelFallbackService.ModelInvokeInfo info = result.info();
+
+        // 先发送 model_info 事件
+        try {
+            emitter.send(SseEmitter.event()
+                    .name("model_info")
+                    .data(toModelInfoJson(info)));
+        } catch (IOException e) {
+            emitter.completeWithError(e);
+            return emitter;
+        }
+
+        // 逐 chunk 转发（跳过 model_info 前缀）
+        result.stream()
+                .skip(1)
                 .subscribe(
                         chunk -> {
                             try {
+                                // 过滤 [DONE] — SseEmitter 会在 complete() 时自然结束
+                                if ("[DONE]".equals(chunk)) return;
                                 emitter.send(chunk);
                             } catch (IOException e) {
                                 emitter.completeWithError(e);
                             }
                         },
                         error -> {
-                            // 将异常转为统一错误响应 JSON，通过 error 事件发送
                             BaseResponse<?> errorResp = GlobalExceptionHandler.buildErrorResponse(error);
                             try {
                                 String json = objectMapper.writeValueAsString(errorResp);
@@ -117,15 +182,53 @@ public class AiController {
     private ToolCallbackProvider toolCallbacks;
 
     /**
-     * 流式调用 Manus 超级智能体
+     * 流式调用 Manus 超级智能体（Agent 场景，无 fallback，模型在任务期内锁死）。
      *
-     * @param message
-     * @return
+     * @param message 用户消息
+     * @param model   模型名（可选，不传使用默认模型）
      */
     @GetMapping("/manus/chat")
-    public SseEmitter doChatWithManus(String message) {
-        SoraManus soraManus = new SoraManus(allTools, toolCallbacks, dashscopeChatModel);
+    public SseEmitter doChatWithManus(
+            @RequestParam String message,
+            @RequestParam(required = false) String model) {
+        String targetModel = (model != null && !model.isBlank())
+                ? model
+                : modelConfig.getDefaultModel();
+        SoraManus soraManus = new SoraManus(allTools, toolCallbacks, dashscopeChatModel, targetModel);
+        // SoraManus.runStream() 内部已发送 model_info 事件
         return soraManus.runStream(message);
     }
 
+    // ---- 私有工具方法 ----
+
+    private String toModelInfoJson(ModelFallbackService.ModelInvokeInfo info) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"model\":\"").append(escapeJson(info.getActualModel())).append("\"");
+        sb.append(",\"fallback\":").append(info.isFallback());
+        if (info.getFallbackFrom() != null) {
+            sb.append(",\"fallbackFrom\":\"").append(escapeJson(info.getFallbackFrom())).append("\"");
+            sb.append(",\"fallbackReason\":\"").append(escapeJson(info.getFallbackReason())).append("\"");
+        }
+        if (info.getAttempts() != null && !info.getAttempts().isEmpty()) {
+            sb.append(",\"attempts\":[");
+            boolean first = true;
+            for (ModelAttempt a : info.getAttempts()) {
+                if (!first) sb.append(",");
+                sb.append("{\"model\":\"").append(escapeJson(a.getModel()))
+                        .append("\",\"reason\":\"").append(escapeJson(a.getReason())).append("\"}");
+                first = false;
+            }
+            sb.append("]");
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    private String escapeJson(String s) {
+        if (s == null) return "null";
+        return s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r");
+    }
 }

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import MarkdownIt from 'markdown-it'
-import type { ChatMessage, AgentState } from '@/types/chat'
+import type { ChatMessage, AgentState, ModelInfo } from '@/types/chat'
 
 const props = defineProps<{
   message: ChatMessage
   isStreaming: boolean
   agentState?: AgentState | null
+  /** 模型切换信息（收到后端 model_info 事件后传入） */
+  modelInfo?: ModelInfo | null
 }>()
 
 const emit = defineEmits<{
@@ -44,6 +46,25 @@ const statusLabel = computed(() => {
       return { icon: '❌', text: '执行出错', color: 'text-red-600 bg-red-50 border-red-200' }
     default:
       return null
+  }
+})
+
+const modelLabel = computed(() => {
+  if (!props.modelInfo) return null
+  const info = props.modelInfo
+  const displayName = info.model || '未知模型'
+  if (info.fallback && info.fallbackFrom) {
+    return {
+      icon: '🔄',
+      text: `已切换至 ${displayName}（原 ${info.fallbackFrom}: ${info.fallbackReason || '调用失败'}）`,
+      color: 'text-amber-600 bg-amber-50 border-amber-200',
+    }
+  }
+  // 正常 — 显示当前使用的模型
+  return {
+    icon: '🧠',
+    text: `模型: ${displayName}`,
+    color: 'text-slate-500 bg-slate-50 border-slate-200',
   }
 })
 
@@ -186,6 +207,18 @@ const formattedTime = computed(() => {
           </svg>
           <span>{{ copied ? '已复制' : '复制' }}</span>
         </button>
+      </div>
+
+      <!-- Model info badge (shown when model_info event received) -->
+      <div
+        v-if="modelLabel"
+        :class="[
+          'mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-opacity duration-300',
+          modelLabel.color,
+        ]"
+      >
+        <span>{{ modelLabel.icon }}</span>
+        <span>{{ modelLabel.text }}</span>
       </div>
 
       <!-- Agent status badge (shown after streaming completes) -->

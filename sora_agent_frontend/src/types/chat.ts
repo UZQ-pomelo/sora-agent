@@ -5,6 +5,21 @@ export interface ChatMessage {
   timestamp: number
 }
 
+/** 模型信息 — 可用模型列表项 */
+export interface ModelOption {
+  name: string
+  display: string
+}
+
+/** 模型切换结果 — 对应后端 model_info 事件 */
+export interface ModelInfo {
+  model: string | null
+  fallback: boolean
+  fallbackFrom?: string
+  fallbackReason?: string
+  attempts?: Array<{ model: string; reason: string }>
+}
+
 /** Agent 终止状态枚举，与后端 AgentState 对应 */
 export type AgentState = 'IDLE' | 'RUNNING' | 'FINISHED' | 'ERROR' | 'STUCK'
 
@@ -22,4 +37,6 @@ export interface SSEOptions {
   onOpen?: () => void
   /** 收到后端发送的 agent_state 命名事件时触发，用于区分正常完成/死循环终止/错误 */
   onAgentState?: (state: AgentState) => void
+  /** 收到后端发送的 model_info 命名事件时触发 */
+  onModelInfo?: (info: ModelInfo) => void
 }
