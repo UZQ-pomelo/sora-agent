@@ -1,0 +1,56 @@
+# ============================================================
+# 本地开发配置文件模板
+# 使用方式：复制为 application-local.yml 并填入你的真实配置
+#   cp application-local.yml.example application-local.yml
+# ============================================================
+
+spring:
+  ai:
+    dashscope:
+      api-key: <你的 DashScope API Key>
+      chat:
+        options:
+          model: deepseek-v3.2
+      image:
+        enabled: true
+        options:
+          model: wanx-v1
+    vectorstore:
+      pgvector:
+        initialize-schema: true
+        index-type: HNSW
+        dimensions: 1536
+        distance-type: COSINE_DISTANCE
+        max-document-batch-size: 10
+        schema-name: public
+
+  # MySQL — 主数据源（MyBatis-Plus）
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/sora_agent
+    username: <你的 MySQL 用户名>
+    password: <你的 MySQL 密码>
+
+# Exa 联网搜索（可选，不填则搜索功能不可用）
+exa:
+  api-key: <你的 Exa API Key>
+
+# 可随意添加模型（仅限阿里云百炼平台）
+app:
+  models:
+    available:
+      - name: deepseek-v3.2
+        display: "DeepSeek V3.2"
+      - name: qwen-turbo
+        display: "Qwen Turbo"
+      - name: qwen-plus
+        display: "Qwen Plus"
+      - name: deepseek-v3
+        display: "Deepseek V3"
+    default-model: deepseek-v3.2
+  datasource:
+    postgresql:
+      driver-class-name: org.postgresql.Driver
+      jdbc-url: jdbc:postgresql://localhost:5432/sora_agent
+      username: <你的 PostgreSQL 用户名>
+      password: <你的 PostgreSQL 密码>

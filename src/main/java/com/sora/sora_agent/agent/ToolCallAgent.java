@@ -54,13 +54,20 @@ public class ToolCallAgent extends ReActAgent {
     private String pendingAssistantText = null;
 
     public ToolCallAgent(ToolCallback[] availableTools) {
+        this(availableTools, DashScopeChatOptions.builder()
+                .withInternalToolExecutionEnabled(false)
+                .build());
+    }
+
+    /**
+     * 带自定义 ChatOptions 的构造器（供子类注入模型名等参数）。
+     */
+    public ToolCallAgent(ToolCallback[] availableTools, ChatOptions chatOptions) {
         super();
         this.availableTools = availableTools;
         this.toolCallingManager = ToolCallingManager.builder().build();
         // 禁用 Spring AI 内置的工具调用机制，自己维护选项和消息上下文
-        this.chatOptions = DashScopeChatOptions.builder()
-                .withInternalToolExecutionEnabled(false)
-                .build();
+        this.chatOptions = chatOptions;
     }
 
     /**

@@ -3,9 +3,11 @@ import ChatContainer from '@/components/ChatContainer.vue'
 import type { ChatPageConfig } from '@/components/ChatContainer.vue'
 
 const config: ChatPageConfig = {
-  buildUrl: (message: string, chatId?: string) => {
-    const base = `/api/ai/tour_app/chat/sse?message=${message}`
-    return chatId ? `${base}&chatId=${chatId}` : base
+  buildUrl: (message: string, chatId?: string, model?: string) => {
+    let base = `/api/ai/tour_app/chat/server?message=${message}`
+    if (chatId) base += `&chatId=${chatId}`
+    if (model) base += `&model=${model}`
+    return base
   },
   useChatId: true,
   title: 'AI 旅游助手',

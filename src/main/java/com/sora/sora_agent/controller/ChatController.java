@@ -43,13 +43,15 @@ public class ChatController {
             @Parameter(description = "用户消息, 例如: 我想去广州旅游, 帮我规划3天行程")
             @RequestParam("message") String message,
             @Parameter(description = "会话ID (可选), 留空则自动创建新会话。同一 chatId 可连续对话保持上下文")
-            @RequestParam(name = "chatId", required = false) String chatId) {
+            @RequestParam(name = "chatId", required = false) String chatId,
+            @Parameter(description = "模型名 (可选), 如 deepseek-v4-flash、qwen-turbo、qwen-plus")
+            @RequestParam(name = "model", required = false) String model) {
 
         String id = (chatId == null || chatId.isBlank())
                 ? UUID.randomUUID().toString()
                 : chatId;
 
-        String answer = tourApp.doChat(message, id);
+        String answer = tourApp.doChat(message, id, model);
         return BaseResponse.success(answer);
     }
 }
