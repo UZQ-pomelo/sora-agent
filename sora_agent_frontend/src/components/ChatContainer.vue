@@ -83,6 +83,8 @@ const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const conversations = ref<ConversationSummary[]>([])
 const conversationsLoading = ref(false)
 const showConversationPanel = ref(false)
+// 历史加载请求序号：只让最新一次请求生效，防止乱序覆盖（快速切会话/加载中发送消息）
+let historyRequestSeq = 0
 
 const hasMessages = computed(() => messages.value.length > 0)
 
@@ -104,6 +106,8 @@ watch(messages, () => scrollToBottom(), { deep: true })
 // --- SSE ---
 function sendMessage(rawText: string) {
   if (isStreaming.value || !rawText.trim()) return
+  // 使在途的历史加载请求失效，避免其覆盖用户刚发的消息
+  historyRequestSeq++
 
   // /skill名 或 /workflow名 斜杠命令 → 显式激活能力
   let text = rawText
@@ -185,6 +189,7 @@ function newConversation() {
   if (isStreaming.value) {
     stopStreaming()
   }
+  historyRequestSeq++
   messages.value = []
   chatId.value = crypto.randomUUID()
   currentModelInfo.value = null
@@ -244,10 +249,13 @@ async function switchConversation(id: string) {
 
 async function loadHistory(id: string) {
   if (!props.config.conversationMessagesUrl) return
+  const seq = ++historyRequestSeq
   try {
     const url = props.config.conversationMessagesUrl.replace('{id}', encodeURIComponent(id))
     const resp = await fetch(url)
     const json = await resp.json()
+    // 防乱序：仅最新一次请求生效（快速切会话/期间发送了消息则忽略过期响应）
+    if (seq !== historyRequestSeq) return
     if (json?.data) {
       const history = json.data as HistoryMessage[]
       messages.value = history.map((m) => ({
@@ -258,7 +266,7 @@ async function loadHistory(id: string) {
       }))
     }
   } catch {
-    console.warn('加载会话历史失败')
+    if (seq === historyRequestSeq) console.warn('加载会话历史失败')
   }
 }
 
