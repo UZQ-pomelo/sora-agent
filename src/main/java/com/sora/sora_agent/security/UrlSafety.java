@@ -103,15 +103,23 @@ public final class UrlSafety {
             if ((b[0] & 0xFE) == 0xFC) {
                 return true;                              // fc00::/7 ULA
             }
-            // IPv4-mapped IPv6（::ffff:a.b.c.d）复用 IPv4 判定
-            boolean mapped = true;
+            if (b[0] == 0x20 && b[1] == 0x02) {
+                return true;                              // 6to4 2002::/16 —— 内嵌 IPv4，直接封禁
+            }
+            if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0 && b[3] == 0) {
+                return true;                              // Teredo 2001:0000::/32 —— 内嵌 IPv4，直接封禁
+            }
+            // IPv4-mapped ::ffff:a.b.c.d 与 IPv4-compatible ::a.b.c.d 复用 IPv4 判定
+            boolean zeroPrefix = true;
             for (int i = 0; i < 10; i++) {
                 if (b[i] != 0) {
-                    mapped = false;
+                    zeroPrefix = false;
                     break;
                 }
             }
-            if (mapped && b[10] == (byte) 0xFF && b[11] == (byte) 0xFF) {
+            if (zeroPrefix
+                    && ((b[10] == (byte) 0xFF && b[11] == (byte) 0xFF)
+                        || (b[10] == 0 && b[11] == 0))) {
                 try {
                     Inet4Address v4 = (Inet4Address) InetAddress.getByAddress(
                             new byte[]{b[12], b[13], b[14], b[15]});
