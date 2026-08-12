@@ -1,9 +1,12 @@
 package com.sora.sora_agent.tool;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sora.sora_agent.security.CommandGuard;
 import com.sora.sora_agent.security.SecurityProperties;
 import com.sora.sora_agent.skill.SkillLoader;
 import com.sora.sora_agent.skill.UseSkillTool;
+import com.sora.sora_agent.workflow.RunWorkflowTool;
+import com.sora.sora_agent.workflow.WorkflowEngine;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,10 +30,15 @@ public class ToolRegistration {
 
     private final SecurityProperties security;
     private final SkillLoader skillLoader;
+    private final WorkflowEngine workflowEngine;
+    private final ObjectMapper objectMapper;
 
-    public ToolRegistration(SecurityProperties security, SkillLoader skillLoader) {
+    public ToolRegistration(SecurityProperties security, SkillLoader skillLoader,
+                            WorkflowEngine workflowEngine, ObjectMapper objectMapper) {
         this.security = security;
         this.skillLoader = skillLoader;
+        this.workflowEngine = workflowEngine;
+        this.objectMapper = objectMapper;
     }
 
     @Bean
@@ -77,6 +85,10 @@ public class ToolRegistration {
 
         // 技能激活工具（恒注册，无害；skills 清单由各 agent 注入 system prompt）
         tools.addAll(List.of(ToolCallbacks.from(new UseSkillTool(skillLoader), "useSkill")));
+
+        // 工作流运行工具（恒注册，无害；workflows 清单由各 agent 注入 system prompt）
+        tools.addAll(List.of(ToolCallbacks.from(
+                new RunWorkflowTool(workflowEngine, objectMapper), "runWorkflow")));
 
         return tools.toArray(new ToolCallback[0]);
     }

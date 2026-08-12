@@ -105,12 +105,18 @@ watch(messages, () => scrollToBottom(), { deep: true })
 function sendMessage(rawText: string) {
   if (isStreaming.value || !rawText.trim()) return
 
-  // /skill名 斜杠命令 → 显式激活技能
+  // /skill名 或 /workflow名 斜杠命令 → 显式激活能力
   let text = rawText
   const skillMatch = text.trim().match(/^\/skill\s+(\S+)/)
   if (skillMatch) {
     const skillName = skillMatch[1]
     text = `请激活并使用技能「${skillName}」，按该技能的指南完成任务`
+  } else {
+    const workflowMatch = text.trim().match(/^\/workflow\s+(\S+)/)
+    if (workflowMatch) {
+      const workflowName = workflowMatch[1]
+      text = `请运行工作流「${workflowName}」，按该工作流的固定流程执行`
+    }
   }
 
   // Add user message

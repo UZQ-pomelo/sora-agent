@@ -4,6 +4,8 @@ import com.sora.sora_agent.advisor.MyLoggerAdvisor;
 import com.sora.sora_agent.chatmemory.ConversationMemory;
 import com.sora.sora_agent.skill.Skill;
 import com.sora.sora_agent.skill.SkillLoader;
+import com.sora.sora_agent.workflow.Workflow;
+import com.sora.sora_agent.workflow.WorkflowLoader;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -35,6 +37,14 @@ public class SoraManus extends ToolCallAgent {
 
     public void setSkillLoader(SkillLoader skillLoader) {
         this.skillLoader = skillLoader;
+    }
+
+    /** 工作流体系（可选；注入后 systemPrompt 追加可用工作流清单） */
+    private WorkflowLoader workflowLoader;
+    private boolean workflowsInjected = false;
+
+    public void setWorkflowLoader(WorkflowLoader workflowLoader) {
+        this.workflowLoader = workflowLoader;
     }
 
     /**
@@ -116,6 +126,8 @@ public class SoraManus extends ToolCallAgent {
                 this.setState(com.sora.sora_agent.agent.model.AgentState.RUNNING);
                 // 注入可用技能清单（若注入技能体系）
                 injectSkillGuide();
+                // 注入可用工作流清单（若注入工作流体系）
+                injectWorkflowGuide();
                 // 载入会话历史（若开启记忆）
                 if (withMemory) {
                     List<Message> history = conversationMemory.load(conversationId);
@@ -209,6 +221,27 @@ public class SoraManus extends ToolCallAgent {
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
                 .replace("\r", "\\r");
+    }
+
+    /**
+     * 把可用工作流清单（名称+描述）追加到 systemPrompt，引导模型自主触发 runWorkflow。
+     */
+    private void injectWorkflowGuide() {
+        if (workflowLoader == null || workflowsInjected) {
+            return;
+        }
+        workflowsInjected = true;
+        java.util.List<Workflow> workflowList = workflowLoader.list();
+        if (workflowList == null || workflowList.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder(getSystemPrompt());
+        sb.append("\n\n【可用工作流】\n");
+        for (Workflow w : workflowList) {
+            sb.append("- ").append(w.getName()).append(": ").append(w.getDescription()).append("\n");
+        }
+        sb.append("\n当用户任务与某个工作流的标准流程匹配时，调用 runWorkflow(工作流名, 入参JSON) 运行它，不要自行临时发挥。");
+        this.setSystemPrompt(sb.toString());
     }
 
     /**

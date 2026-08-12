@@ -13,6 +13,8 @@ import com.sora.sora_agent.service.ConversationService;
 import com.sora.sora_agent.service.ModelFallbackService;
 import com.sora.sora_agent.service.ModelFallbackService.AllModelsFailedException;
 import com.sora.sora_agent.skill.SkillLoader;
+import com.sora.sora_agent.workflow.WorkflowEngine;
+import com.sora.sora_agent.workflow.WorkflowLoader;
 import com.sora.sora_agent.service.ModelFallbackService.ModelAttempt;
 import com.sora.sora_agent.service.ModelFallbackService.StreamModelResult;
 import jakarta.annotation.Resource;
@@ -63,6 +65,12 @@ public class AiController {
 
     @Resource
     private SkillLoader skillLoader;
+
+    @Resource
+    private WorkflowLoader workflowLoader;
+
+    @Resource
+    private WorkflowEngine workflowEngine;
 
     /**
      * 获取可用模型列表。
@@ -217,6 +225,7 @@ public class AiController {
         SoraManus soraManus = new SoraManus(allTools, toolCallbacks, dashscopeChatModel, targetModel);
         soraManus.setConversationMemory(conversationMemory);
         soraManus.setSkillLoader(skillLoader);
+        soraManus.setWorkflowLoader(workflowLoader);
         // SoraManus.runStream() 内部已发送 model_info 事件
         return soraManus.runStream(message, chatId);
     }
@@ -248,7 +257,33 @@ public class AiController {
         return BaseResponse.success(dto);
     }
 
+    /**
+     * 直接运行工作流（SSE 流式，逐步发送进度事件）。
+     *
+     * @param name  工作流名称
+     * @param input 入参 JSON 对象字符串（可选），如 {"topic":"Spring AI"}
+     */
+    @GetMapping("/workflow/run")
+    public SseEmitter runWorkflow(
+            @RequestParam String name,
+            @RequestParam(required = false) String input) {
+        Map<String, Object> params = parseWorkflowInput(input);
+        return workflowEngine.runStream(name, params);
+    }
+
     // ---- 私有工具方法 ----
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseWorkflowInput(String input) {
+        if (input == null || input.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(input, Map.class);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("工作流入参不是合法 JSON 对象: " + input);
+        }
+    }
 
     private String toModelInfoJson(ModelFallbackService.ModelInvokeInfo info) {
         StringBuilder sb = new StringBuilder();
