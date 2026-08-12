@@ -39,7 +39,7 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
       let buffer = ''
 
       while (true) {
-        const { done, value } = await reader.read()
+        const { done, value } = await readWithTimeout(reader)
 
         if (done) {
           // 流自然结束
@@ -145,4 +145,28 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
       controller.abort()
     },
   }
+}
+
+/** 空闲超时：超过该时长无数据视为断连，防止 reader.read() 永久 pending 卡死 isStreaming */
+const IDLE_TIMEOUT_MS = 60000
+
+function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<{ done: boolean; value?: Uint8Array }> {
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_, rejectTimeout) => {
+      timer = setTimeout(() => rejectTimeout(new Error('SSE 连接空闲超时（60s 无数据）')), IDLE_TIMEOUT_MS)
+    })
+    Promise.race([reader.read(), timeout]).then(
+      (v) => {
+        clearTimeout(timer!)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer!)
+        reject(e)
+      },
+    )
+  })
 }

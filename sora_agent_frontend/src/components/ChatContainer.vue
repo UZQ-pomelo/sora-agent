@@ -5,7 +5,7 @@ import ChatBubble from './ChatBubble.vue'
 import ChatInput from './ChatInput.vue'
 import ConversationListPanel from './ConversationListPanel.vue'
 import { createSSEConnection } from '@/utils/sse'
-import { safeCopy } from '@/utils/clipboard'
+import { uuid } from '@/utils/uuid'
 import type {
   ChatMessage,
   AgentState,
@@ -66,7 +66,7 @@ const router = useRouter()
 
 function resolveChatIdFromUrl(): string {
   const q = route.query.chat
-  return typeof q === 'string' && q ? q : crypto.randomUUID()
+  return typeof q === 'string' && q ? q : uuid()
 }
 
 // --- State ---
@@ -101,7 +101,18 @@ function scrollToBottom(smooth = true) {
   })
 }
 
-watch(messages, () => scrollToBottom(), { deep: true })
+// 消息上限：防长会话内存/DOM 无限增长（截断保留最近 MAX_MESSAGES 条）
+const MAX_MESSAGES = 200
+watch(
+  messages,
+  (list) => {
+    if (list.length > MAX_MESSAGES) {
+      messages.value = list.slice(-MAX_MESSAGES)
+    }
+    scrollToBottom()
+  },
+  { deep: true },
+)
 
 // --- SSE ---
 function sendMessage(rawText: string) {
@@ -131,7 +142,7 @@ function sendMessage(rawText: string) {
 
   // Add user message
   const userMsg: ChatMessage = {
-    id: crypto.randomUUID(),
+    id: uuid(),
     role: 'user',
     content: text,
     timestamp: Date.now(),
@@ -142,7 +153,7 @@ function sendMessage(rawText: string) {
 
   // Create placeholder assistant message
   messages.value.push({
-    id: crypto.randomUUID(),
+    id: uuid(),
     role: 'assistant',
     content: '',
     timestamp: Date.now(),
@@ -163,9 +174,10 @@ function sendMessage(rawText: string) {
     },
     onError(error: string) {
       if (error.startsWith('⚠️')) {
-        if (!reactiveMsg.content) {
-          reactiveMsg.content = error
-        }
+        // 空气泡直接显示错误；已有内容时追加错误标记，不再静默吞掉
+        reactiveMsg.content = reactiveMsg.content
+          ? `${reactiveMsg.content}\n\n${error}`
+          : error
       }
     },
     onComplete() {
@@ -197,7 +209,7 @@ function newConversation() {
   }
   historyRequestSeq++
   messages.value = []
-  chatId.value = crypto.randomUUID()
+  chatId.value = uuid()
   currentModelInfo.value = null
   agentState.value = null
   showConversationPanel.value = false
@@ -205,10 +217,6 @@ function newConversation() {
   if (props.config.useChatId) {
     router.replace({ query: {} })
   }
-}
-
-async function copyMessage(content: string) {
-  await safeCopy(content)
 }
 
 // --- 对话记录 ---
@@ -243,36 +251,48 @@ async function switchConversation(id: string) {
   if (isStreaming.value) {
     stopStreaming()
   }
+  const prevChatId = chatId.value
   chatId.value = id
   currentModelInfo.value = null
   agentState.value = null
   if (props.config.useChatId) {
     router.replace({ query: { chat: id } })
   }
-  await loadHistory(id)
+  const ok = await loadHistory(id)
+  if (!ok) {
+    // 加载失败回滚：恢复原 chatId 与 URL，避免 UI 与持久化错位
+    chatId.value = prevChatId
+    if (props.config.useChatId) {
+      router.replace(prevChatId ? { query: { chat: prevChatId } } : { query: {} })
+    }
+  }
   showConversationPanel.value = false
 }
 
-async function loadHistory(id: string) {
-  if (!props.config.conversationMessagesUrl) return
+async function loadHistory(id: string): Promise<boolean> {
+  if (!props.config.conversationMessagesUrl) return false
   const seq = ++historyRequestSeq
   try {
     const url = props.config.conversationMessagesUrl.replace('{id}', encodeURIComponent(id))
     const resp = await fetch(url)
     const json = await resp.json()
     // 防乱序：仅最新一次请求生效（快速切会话/期间发送了消息则忽略过期响应）
-    if (seq !== historyRequestSeq) return
+    if (seq !== historyRequestSeq) return false
     if (json?.data) {
       const history = json.data as HistoryMessage[]
       messages.value = history.map((m) => ({
-        id: crypto.randomUUID(),
+        id: uuid(),
         role: m.role,
         content: m.content,
-        timestamp: Date.now(),
+        // 历史消息无真实时间：标记 0，ChatBubble 显示「历史」
+        timestamp: 0,
       }))
+      return true
     }
+    return false
   } catch {
     if (seq === historyRequestSeq) console.warn('加载会话历史失败')
+    return false
   }
 }
 
@@ -287,9 +307,17 @@ watch(
   },
 )
 
+// --- 面板点击外部关闭 ---
+function onDocumentClick() {
+  if (showConversationPanel.value) {
+    showConversationPanel.value = false
+  }
+}
+
 // --- Lifecycle ---
 onMounted(() => {
   fetchModels()
+  document.addEventListener('click', onDocumentClick)
   // 若 URL 带了 chat 参数，恢复该会话历史
   const q = route.query.chat
   if (typeof q === 'string' && q && props.config.useChatId) {
@@ -298,6 +326,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick)
   if (sseConnection.value) {
     sseConnection.value.abort()
   }
@@ -363,7 +392,7 @@ defineExpose({ newConversation })
                    text-warm-500 hover:text-accent-600 hover:bg-accent-50
                    rounded-lg transition-colors duration-150 shrink-0"
             title="对话记录"
-            @click="toggleConversationPanel"
+            @click.stop="toggleConversationPanel"
           >
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="4" width="18" height="16" rx="2"/>
@@ -438,7 +467,6 @@ defineExpose({ newConversation })
           :is-streaming="isStreaming && msg === messages[messages.length - 1] && msg.role === 'assistant'"
           :agent-state="(!isStreaming && idx === messages.length - 1 && msg.role === 'assistant') ? agentState : null"
           :model-info="(idx === messages.length - 1 && msg.role === 'assistant') ? currentModelInfo : null"
-          @copy="copyMessage"
         />
         <!-- Bottom spacer for comfortable scrolling -->
         <div class="h-4"></div>
