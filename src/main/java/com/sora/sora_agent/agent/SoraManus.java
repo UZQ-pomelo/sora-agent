@@ -18,6 +18,7 @@ import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 
 @Slf4j
 public class SoraManus extends ToolCallAgent {
@@ -55,6 +56,13 @@ public class SoraManus extends ToolCallAgent {
 
     public void setAgentLoader(WorkerAgentLoader agentLoader) {
         this.agentLoader = agentLoader;
+    }
+
+    /** 专用执行线程池（可选；注入后 agent 循环不占 JVM 公共 ForkJoinPool） */
+    private ExecutorService executorService;
+
+    public void setExecutorService(ExecutorService executorService) {
+        this.executorService = executorService;
     }
 
     /**
@@ -210,7 +218,7 @@ public class SoraManus extends ToolCallAgent {
             } catch (Exception e) {
                 emitter.completeWithError(e);
             }
-        });
+        }, executorService != null ? executorService : java.util.concurrent.CompletableFuture.commonPool());
 
         emitter.onTimeout(() -> {
             this.setState(com.sora.sora_agent.agent.model.AgentState.ERROR);

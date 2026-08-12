@@ -89,6 +89,7 @@ app:
   agent:
     enabled: true
     max-concurrency: 4
+    delegation-timeout-seconds: 120  # 单次委派总超时，防止 worker 挂起拖死 supervisor
     # 额外专家目录（文件系统路径，可选）；留空则只加载 classpath 内置专家 src/main/resources/agents/
     # dir: ./agents
   # 会话记忆（Manus 智能体跨请求记忆 + 「对话记录」）

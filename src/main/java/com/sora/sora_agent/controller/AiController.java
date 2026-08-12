@@ -40,6 +40,7 @@ import reactor.core.publisher.Flux;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 
 @Slf4j
 @RestController
@@ -75,6 +76,9 @@ public class AiController {
 
     @Resource
     private WorkerAgentLoader workerAgentLoader;
+
+    @Resource
+    private ExecutorService agentExecutor;
 
     /**
      * 获取可用模型列表。
@@ -231,6 +235,7 @@ public class AiController {
         soraManus.setSkillLoader(skillLoader);
         soraManus.setWorkflowLoader(workflowLoader);
         soraManus.setAgentLoader(workerAgentLoader);
+        soraManus.setExecutorService(agentExecutor);
         // SoraManus.runStream() 内部已发送 model_info 事件
         return soraManus.runStream(message, chatId);
     }

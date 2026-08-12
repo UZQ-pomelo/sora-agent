@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,13 +45,16 @@ public class WorkflowEngine {
     private final ChatModel chatModel;
     private final ObjectProvider<ToolCallback[]> toolProvider;
     private final ObjectMapper objectMapper;
+    private final ExecutorService agentExecutor;
 
     public WorkflowEngine(WorkflowLoader workflowLoader, ChatModel chatModel,
-                          ObjectProvider<ToolCallback[]> toolProvider, ObjectMapper objectMapper) {
+                          ObjectProvider<ToolCallback[]> toolProvider, ObjectMapper objectMapper,
+                          ExecutorService agentExecutor) {
         this.workflowLoader = workflowLoader;
         this.chatModel = chatModel;
         this.toolProvider = toolProvider;
         this.objectMapper = objectMapper;
+        this.agentExecutor = agentExecutor;
     }
 
     /**
@@ -81,7 +85,7 @@ public class WorkflowEngine {
                 }
                 emitter.complete();
             }
-        });
+        }, agentExecutor);
         return emitter;
     }
 

@@ -23,4 +23,7 @@ public class WorkerAgentProperties {
 
     /** 并行委派的最大并发数（防线程爆炸）。 */
     private int maxConcurrency = 4;
+
+    /** 单次委派总超时（秒），超时返回已完成的部分结果，防止 worker 挂起拖死 supervisor。 */
+    private long delegationTimeoutSeconds = 120;
 }
