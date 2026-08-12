@@ -10,9 +10,11 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 基于 MySQL（MyBatis-Plus）的 ChatMemory 持久化实现。
@@ -25,21 +27,30 @@ import java.util.List;
 public class MySQLChatMemory implements ChatMemory {
 
     private final ChatMemoryMessageMapper mapper;
+    private final TransactionTemplate transactionTemplate;
 
-    public MySQLChatMemory(ChatMemoryMessageMapper mapper) {
+    /** 每会话锁：保证同会话 message_index 分配原子（单实例下足够；跨实例需唯一索引+重试） */
+    private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
+
+    public MySQLChatMemory(ChatMemoryMessageMapper mapper, PlatformTransactionManager txManager) {
         this.mapper = mapper;
+        this.transactionTemplate = new TransactionTemplate(txManager);
     }
 
     @Override
-    @Transactional
     public void add(String conversationId, List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
             return;
         }
-        Long nextIndex = getNextIndex(conversationId);
-        for (Message message : messages) {
-            ChatMemoryMessage entity = toEntity(conversationId, message, nextIndex++);
-            mapper.insert(entity);
+        // 锁跨事务提交，防止并发同会话读到相同 MAX(message_index)+1
+        synchronized (lockFor(conversationId)) {
+            transactionTemplate.executeWithoutResult(status -> {
+                Long nextIndex = getNextIndex(conversationId);
+                for (Message message : messages) {
+                    ChatMemoryMessage entity = toEntity(conversationId, message, nextIndex++);
+                    mapper.insert(entity);
+                }
+            });
         }
     }
 
@@ -55,9 +66,25 @@ public class MySQLChatMemory implements ChatMemory {
             return List.of();
         }
 
+        // 只回读可还原的消息类型，跳过 TOOL/FUNCTION（否则 toMessage 抛异常导致会话记忆崩溃）
         return all.stream()
+                .filter(e -> isReadableType(e.getMessageType()))
                 .map(this::toMessage)
                 .toList();
+    }
+
+    private Object lockFor(String conversationId) {
+        return locks.computeIfAbsent(conversationId, k -> new Object());
+    }
+
+    private boolean isReadableType(String type) {
+        if (type == null) {
+            return false;
+        }
+        return switch (type.toLowerCase()) {
+            case "system", "user", "assistant" -> true;
+            default -> false;
+        };
     }
 
     @Override
