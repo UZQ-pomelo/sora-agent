@@ -42,6 +42,9 @@ public abstract class BaseAgent {
     private int stuckCount = 0;
     private int maxStuckCount = 2;
 
+    // 死循环文本比对起点：加载外部历史后设为历史条数，只比对本轮新增消息，避免把历史当重复
+    protected int stuckCompareFrom = 0;
+
     // LLM
     private ChatClient chatClient;
 
@@ -241,7 +244,7 @@ public abstract class BaseAgent {
 
         // 计算之前消息中相同内容出现的次数
         int duplicateCount = 0;
-        for (int i = messageList.size() - 2; i >= 0; i--) {
+        for (int i = messageList.size() - 2; i >= stuckCompareFrom; i--) {
             Message msg = messageList.get(i);
             String content = extractMessageContent(msg);
             if (content != null && content.equals(lastContent)) {
@@ -292,6 +295,7 @@ public abstract class BaseAgent {
     protected void cleanup() {
         // 重置死循环计数器，确保下次运行从零开始
         this.stuckCount = 0;
+        this.stuckCompareFrom = 0;
         // 子类可以重写此方法来清理资源
     }
 }

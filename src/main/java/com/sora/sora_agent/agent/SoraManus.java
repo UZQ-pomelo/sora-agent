@@ -156,6 +156,8 @@ public class SoraManus extends ToolCallAgent {
                         historySize = history.size();
                     }
                 }
+                // 死循环比对只针对本轮新增消息，避免把加载的历史当重复
+                this.setStuckCompareFrom(historySize);
                 this.getMessageList().add(new org.springframework.ai.chat.messages.UserMessage(userPrompt));
 
                 try {

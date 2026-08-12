@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -112,6 +113,31 @@ class ConversationMemoryTest {
         when(chatMemory.get("manus:abc")).thenReturn(msgs(5));
         assertEquals(2, memory.load("abc").size());
         verify(chatModel, never()).call(any(Prompt.class));
+    }
+
+    @Test
+    void loadReusesSummaryFromCache() {
+        props.setWindowSize(2);
+        when(chatMemory.get("manus:abc")).thenReturn(msgs(5));
+        stubSummary("缓存摘要");
+
+        memory.load("abc");  // 第一次：调用摘要模型并缓存
+        memory.load("abc");  // 第二次：命中缓存，不再调用
+
+        verify(chatModel, times(1)).call(any(Prompt.class));
+    }
+
+    @Test
+    void clearInvalidatesSummaryCache() {
+        props.setWindowSize(2);
+        when(chatMemory.get("manus:abc")).thenReturn(msgs(5));
+        stubSummary("摘要A");
+
+        memory.load("abc");
+        memory.clear("abc");  // 清会话同时清缓存
+        memory.load("abc");   // 重新生成摘要
+
+        verify(chatModel, times(2)).call(any(Prompt.class));
     }
 
     @Test

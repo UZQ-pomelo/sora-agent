@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -33,6 +34,10 @@ public class ConversationMemory {
     private final ChatMemory chatMemory;
     private final ChatModel chatModel;
     private final ConversationMemoryProperties props;
+
+    /** 摘要缓存（键 = 命名空间会话 id）：进程内复用，避免每轮对同一批 overflow 重复调摘要模型。 */
+    private final ConcurrentHashMap<String, String> summaryCache = new ConcurrentHashMap<>();
+    private static final int SUMMARY_CACHE_MAX = 500;
 
     public ConversationMemory(@Qualifier("mySQLChatMemory") ChatMemory chatMemory,
                               ChatModel chatModel,
@@ -59,7 +64,7 @@ public class ConversationMemory {
         if (!props.isSummarizeOverflow()) {
             return keep;
         }
-        String summary = summarize(overflow);
+        String summary = summarizeCached(namespaced(conversationId), overflow);
         if (summary == null || summary.isBlank()) {
             return keep;
         }
@@ -90,7 +95,20 @@ public class ConversationMemory {
      * 清空某会话全部历史。
      */
     public void clear(String conversationId) {
+        summaryCache.remove(namespaced(conversationId));
         chatMemory.clear(namespaced(conversationId));
+    }
+
+    private String summarizeCached(String cacheKey, List<Message> overflow) {
+        String cached = summaryCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+        String summary = summarize(overflow);
+        if (summary != null && !summary.isBlank() && summaryCache.size() < SUMMARY_CACHE_MAX) {
+            summaryCache.put(cacheKey, summary);
+        }
+        return summary;
     }
 
     private String namespaced(String conversationId) {
