@@ -127,7 +127,7 @@ public class WorkflowEngine {
         return new WorkflowExecution(workflow, stepResults, finalResult);
     }
 
-    private String executeStep(WorkflowStep step, Map<String, Object> input, Map<String, String> stepResults) {
+    private String executeStep(WorkflowStep step, Map<String, Object> input, Map<String, String> stepResults) throws IOException {
         String type = step.getType() == null ? "" : step.getType().trim().toLowerCase();
         if ("llm".equals(type)) {
             String prompt = renderTemplate(step.getPrompt(), input, stepResults);

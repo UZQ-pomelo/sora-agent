@@ -6,6 +6,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.stereotype.Component;
+import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
 
@@ -108,7 +109,7 @@ public class WorkflowLoader {
     }
 
     private Workflow parse(InputStream in) {
-        Yaml yaml = new Yaml(new Constructor(Workflow.class));
+        Yaml yaml = new Yaml(new Constructor(Workflow.class, new LoaderOptions()));
         return yaml.load(in);
     }
 

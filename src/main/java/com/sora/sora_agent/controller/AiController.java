@@ -22,7 +22,6 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
@@ -258,9 +257,9 @@ public class AiController {
         List<Map<String, String>> dto = messages.stream()
                 .filter(m -> m instanceof UserMessage || m instanceof AssistantMessage)
                 .map(m -> {
-                    MessageType type = m.getType();
+                    String role = (m instanceof UserMessage) ? "user" : "assistant";
                     return Map.of(
-                            "role", type == MessageType.USER ? "user" : "assistant",
+                            "role", role,
                             "content", m.getText() == null ? "" : m.getText());
                 })
                 .toList();

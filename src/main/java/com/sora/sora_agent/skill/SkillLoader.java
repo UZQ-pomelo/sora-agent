@@ -6,6 +6,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.stereotype.Component;
+import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
 
@@ -108,7 +109,7 @@ public class SkillLoader {
     }
 
     private Skill parse(InputStream in) {
-        Yaml yaml = new Yaml(new Constructor(Skill.class));
+        Yaml yaml = new Yaml(new Constructor(Skill.class, new LoaderOptions()));
         return yaml.load(in);
     }
 

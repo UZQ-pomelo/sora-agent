@@ -66,7 +66,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         }
         if (props.getRateLimit().isEnabled()
                 && !rateLimiter.tryAcquire(key, props.getRateLimit().getPerKeyPerMinute(), 60_000L)) {
-            writeError(response, HttpServletResponse.SC_TOO_MANY_REQUESTS, 42900, "请求过于频繁，已超过限流阈值");
+            writeError(response, 429, 42900, "请求过于频繁，已超过限流阈值"); // SC_TOO_MANY_REQUESTS 在部分 servlet 版本缺失，用字面量
             return;
         }
         filterChain.doFilter(request, response);

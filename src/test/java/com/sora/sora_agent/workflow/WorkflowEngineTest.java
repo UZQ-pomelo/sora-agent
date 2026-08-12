@@ -9,11 +9,12 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolDefinition;
+import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -41,15 +42,15 @@ class WorkflowEngineTest {
         chatModel = mock(ChatModel.class);
         workflowLoader = mock(WorkflowLoader.class);
         toolProvider = mock(ObjectProvider.class);
-        engine = new WorkflowEngine(workflowLoader, chatModel, toolProvider, new ObjectMapper());
+        engine = new WorkflowEngine(workflowLoader, chatModel, toolProvider, new ObjectMapper(),
+                Executors.newSingleThreadExecutor());
     }
 
     private ChatResponse resp(String text) {
-        Generation generation = mock(Generation.class);
-        when(generation.getOutput()).thenReturn(new AssistantMessage(text));
-        ChatResponse response = mock(ChatResponse.class);
-        when(response.getResult()).thenReturn(generation);
-        return response;
+        // Generation/ChatResponse 是 record（访问器 final），Mockito 默认 mockmaker 无法 stub，
+        // 直接构造真实对象
+        Generation generation = new Generation(new AssistantMessage(text));
+        return new ChatResponse(List.of(generation));
     }
 
     private ToolCallback tool(String name, String result) {

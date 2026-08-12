@@ -220,7 +220,7 @@ public class SoraManus extends ToolCallAgent {
             } catch (Exception e) {
                 emitter.completeWithError(e);
             }
-        }, executorService != null ? executorService : java.util.concurrent.CompletableFuture.commonPool());
+        }, executorService != null ? executorService : java.util.concurrent.ForkJoinPool.commonPool());
 
         emitter.onTimeout(() -> {
             this.setState(com.sora.sora_agent.agent.model.AgentState.ERROR);

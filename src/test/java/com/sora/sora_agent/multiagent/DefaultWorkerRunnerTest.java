@@ -6,7 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.ToolDefinition;
+import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.Arrays;
@@ -39,17 +39,18 @@ class DefaultWorkerRunnerTest {
 
     private ToolCallback tool(String name) {
         ToolCallback cb = mock(ToolCallback.class);
-        ToolDefinition td = mock(ToolDefinition.class);
-        when(td.name()).thenReturn(name);
-        when(cb.getToolDefinition()).thenReturn(td);
+        // ToolDefinition.name() 是 final 方法，Mockito 默认 mockmaker 无法 stub → 用真实对象
+        when(cb.getToolDefinition()).thenReturn(new DefaultToolDefinition(name, name + " 描述", "{}"));
         return cb;
     }
 
     @Test
     void workerToolsExcludeForbiddenAndDelegateAndRunWorkflow() {
-        when(toolProvider.getIfAvailable()).thenReturn(new ToolCallback[]{
+        // 先构建数组再 stub（tool() 内部有 when()，不能嵌套在 thenReturn 参数里）
+        ToolCallback[] tools = new ToolCallback[]{
                 tool("searchweb"), tool("webScraping"), tool("executeTerminalCommand"),
-                tool("delegate"), tool("runWorkflow"), tool("generatePDF")});
+                tool("delegate"), tool("runWorkflow"), tool("generatePDF")};
+        when(toolProvider.getIfAvailable()).thenReturn(tools);
 
         WorkerAgent def = new WorkerAgent();
         def.setName("w");
@@ -69,8 +70,9 @@ class DefaultWorkerRunnerTest {
 
     @Test
     void emptyWhitelistKeepsAllExceptForbidden() {
-        when(toolProvider.getIfAvailable()).thenReturn(new ToolCallback[]{
-                tool("searchweb"), tool("executeTerminalCommand"), tool("delegate")});
+        ToolCallback[] tools = new ToolCallback[]{
+                tool("searchweb"), tool("executeTerminalCommand"), tool("delegate")};
+        when(toolProvider.getIfAvailable()).thenReturn(tools);
 
         WorkerAgent def = new WorkerAgent();
         def.setName("w");
