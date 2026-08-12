@@ -42,6 +42,10 @@ public final class PathSafety {
         if (fileName.matches("^[a-zA-Z]:.*")) {
             throw new IllegalArgumentException("文件名不能包含盘符: " + fileName);
         }
+        // 拒绝含冒号的文件名（Windows NTFS ADS 如 file.txt:stream，可绕出沙箱写流）
+        if (fileName.indexOf(':') >= 0) {
+            throw new IllegalArgumentException("文件名不能包含冒号: " + fileName);
+        }
         Path base = Path.of(baseDir).toAbsolutePath().normalize();
         Path resolved = base.resolve(fileNamePath).normalize();
         if (!resolved.startsWith(base)) {

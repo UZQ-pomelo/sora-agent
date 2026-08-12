@@ -112,6 +112,9 @@ public class ConversationMemory {
             String prompt = "请把下面这段多轮对话压缩成一段简洁的中文前情摘要，"
                     + "保留关键事实、用户偏好、已执行的任务与结论，150 字以内：\n\n" + text;
             ChatResponse response = chatModel.call(new Prompt(prompt));
+            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+                return null;
+            }
             return response.getResult().getOutput().getText();
         } catch (Exception e) {
             log.warn("会话摘要生成失败，回退为丢弃超窗消息: {}", e.getMessage());

@@ -132,6 +132,9 @@ public class WorkflowEngine {
         if ("llm".equals(type)) {
             String prompt = renderTemplate(step.getPrompt(), input, stepResults);
             ChatResponse response = chatModel.call(new Prompt(prompt));
+            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+                throw new IllegalStateException("模型未返回结果");
+            }
             String text = response.getResult().getOutput().getText();
             return text == null ? "" : text;
         }

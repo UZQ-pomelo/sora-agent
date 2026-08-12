@@ -53,7 +53,8 @@ public class TerminalOperationTool {
                     process.destroyForcibly();
                     return "命令超时(>" + timeoutSeconds + "s)，已强制终止";
                 }
-                String output = outputFuture.get(5, TimeUnit.SECONDS);
+                // 进程已退出，输出流必然结束，直接取结果（不再设 5s 上限，避免大输出误报超时）
+                String output = outputFuture.get();
                 int exitCode = process.exitValue();
                 String prefix = exitCode == 0 ? "" : "命令执行失败, 退出码: " + exitCode + "\n";
                 return prefix + output;

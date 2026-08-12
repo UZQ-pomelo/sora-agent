@@ -119,7 +119,7 @@ public class SoraManus extends ToolCallAgent {
         SseEmitter emitter = new SseEmitter(300000L);
         boolean withMemory = conversationId != null && !conversationId.isBlank() && conversationMemory != null;
 
-        java.util.concurrent.CompletableFuture.runAsync(() -> {
+        java.util.concurrent.CompletableFuture<Void> task = java.util.concurrent.CompletableFuture.runAsync(() -> {
             int historySize = 0;
             try {
                 if (this.getState() != com.sora.sora_agent.agent.model.AgentState.IDLE) {
@@ -222,6 +222,7 @@ public class SoraManus extends ToolCallAgent {
 
         emitter.onTimeout(() -> {
             this.setState(com.sora.sora_agent.agent.model.AgentState.ERROR);
+            task.cancel(true); // 中断未完成的 agent 循环，避免继续调用 LLM 烧 token
             this.cleanup();
             log.warn("SSE connection timed out");
         });
