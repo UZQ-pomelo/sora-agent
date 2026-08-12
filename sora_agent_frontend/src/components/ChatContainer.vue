@@ -109,17 +109,23 @@ function sendMessage(rawText: string) {
   // 使在途的历史加载请求失效，避免其覆盖用户刚发的消息
   historyRequestSeq++
 
-  // /skill名 或 /workflow名 斜杠命令 → 显式激活能力
+  // /skill名 [参数] 或 /workflow名 [参数] 斜杠命令 → 显式激活能力（保留后续参数）
   let text = rawText
-  const skillMatch = text.trim().match(/^\/skill\s+(\S+)/)
+  const skillMatch = text.trim().match(/^\/skill\s+(\S+)(?:\s+([\s\S]*))?$/)
   if (skillMatch) {
     const skillName = skillMatch[1]
-    text = `请激活并使用技能「${skillName}」，按该技能的指南完成任务`
+    const skillArgs = skillMatch[2]?.trim()
+    text = `请激活并使用技能「${skillName}」`
+      + (skillArgs ? `，任务内容：${skillArgs}` : '')
+      + `，按该技能的指南完成任务`
   } else {
-    const workflowMatch = text.trim().match(/^\/workflow\s+(\S+)/)
+    const workflowMatch = text.trim().match(/^\/workflow\s+(\S+)(?:\s+([\s\S]*))?$/)
     if (workflowMatch) {
       const workflowName = workflowMatch[1]
-      text = `请运行工作流「${workflowName}」，按该工作流的固定流程执行`
+      const workflowArgs = workflowMatch[2]?.trim()
+      text = `请运行工作流「${workflowName}」`
+        + (workflowArgs ? `，入参：${workflowArgs}` : '')
+        + `，按该工作流的固定流程执行`
     }
   }
 
