@@ -9,6 +9,7 @@ import com.sora.sora_agent.skill.SkillLoader;
 import com.sora.sora_agent.skill.UseSkillTool;
 import com.sora.sora_agent.workflow.RunWorkflowTool;
 import com.sora.sora_agent.workflow.WorkflowEngine;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,8 +23,9 @@ import java.util.List;
  * 本地工具注册 — 危险工具按配置开关决定是否注册（关闭 = 模型完全不可见）。
  *
  * <p>注册粒度精确到方法：文件读/写可分别开关；终端默认关闭且带资源守卫；
- * Exa 搜索缺 key 时不注册（不再导致启动失败）。</p>
+ * Exa 搜索缺 key 时不注册（不再导致启动失败）。关闭的工具会打 warning 日志提示。</p>
  */
+@Slf4j
 @Configuration
 public class ToolRegistration {
 
@@ -54,9 +56,13 @@ public class ToolRegistration {
         FileOperationTool fileOperationTool = new FileOperationTool();
         if (security.getTools().isFileRead()) {
             tools.addAll(List.of(ToolCallbacks.from(fileOperationTool, "readFile")));
+        } else {
+            log.warn("工具 readFile 未注册：app.security.tools.file-read 未开启");
         }
         if (security.getTools().isFileWrite()) {
             tools.addAll(List.of(ToolCallbacks.from(fileOperationTool, "writeFile")));
+        } else {
+            log.warn("工具 writeFile 未注册：app.security.tools.file-write 未开启");
         }
 
         // 终端（默认关闭；开启后带命令白名单 + 超时 + 输出上限）
@@ -67,21 +73,29 @@ public class ToolRegistration {
                     security.getTools().getTerminal().getTimeoutSeconds(),
                     security.getTools().getTerminal().getMaxOutputBytes());
             tools.addAll(List.of(ToolCallbacks.from(terminalTool, "executeTerminalCommand")));
+        } else {
+            log.warn("工具 executeTerminalCommand 未注册：app.security.tools.terminal.enabled 未开启");
         }
 
         // 网页抓取（默认关闭 + SSRF 防护）
         if (security.getTools().isScrape()) {
             tools.addAll(List.of(ToolCallbacks.from(new WebScrapingTool(), "scrapeWebPage")));
+        } else {
+            log.warn("工具 scrapeWebPage 未注册：app.security.tools.scrape 未开启");
         }
 
         // 资源下载（默认关闭 + SSRF/路径防护）
         if (security.getTools().isDownload()) {
             tools.addAll(List.of(ToolCallbacks.from(new ResourceDownloadTool(), "downloadResource")));
+        } else {
+            log.warn("工具 downloadResource 未注册：app.security.tools.download 未开启");
         }
 
         // Exa 搜索（缺 key 则工具不注册）
         if (exaApiKey != null && !exaApiKey.isBlank()) {
             tools.addAll(List.of(ToolCallbacks.from(new ExaWebSearchTool(exaApiKey), "searchweb")));
+        } else {
+            log.warn("工具 searchweb 未注册：未配置 exa.api-key");
         }
 
         // 无害工具恒注册

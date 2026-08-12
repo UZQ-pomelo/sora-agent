@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 
@@ -89,13 +88,22 @@ public class ImageController {
                     return;
                 }
 
-                response.setContentType(contentType);
-                response.setHeader("Cache-Control", "private, max-age=3600");
+                byte[] body;
                 try (InputStream in = conn.getInputStream()) {
-                    copyWithLimit(in, response.getOutputStream(), MAX_BYTES);
+                    body = readBounded(in, MAX_BYTES + 1);
                 } finally {
                     conn.disconnect();
                 }
+                if (body.length > MAX_BYTES) {
+                    log.warn("图片代理内容超限(>{})，返回 413: {}", MAX_BYTES, imageUrl);
+                    response.setStatus(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
+                    return;
+                }
+                response.setContentType(contentType);
+                response.setHeader("Cache-Control", "private, max-age=3600");
+                response.setContentLength(body.length);
+                response.getOutputStream().write(body);
+                response.getOutputStream().flush();
                 return;
             }
             response.setStatus(HttpServletResponse.SC_BAD_GATEWAY);
@@ -122,18 +130,21 @@ public class ImageController {
         return false;
     }
 
-    private void copyWithLimit(InputStream in, OutputStream out, long limit) throws IOException {
+    /**
+     * 有界读取：读满 limit 字节即停止，返回已读内容（供主流程判 413）。
+     */
+    private byte[] readBounded(InputStream in, long limit) throws IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
         byte[] buf = new byte[8192];
         long total = 0;
         int n;
         while ((n = in.read(buf)) != -1) {
             total += n;
+            bos.write(buf, 0, n);
             if (total > limit) {
-                log.warn("图片代理内容超限已中断");
-                return;
+                break;
             }
-            out.write(buf, 0, n);
         }
-        out.flush();
+        return bos.toByteArray();
     }
 }
