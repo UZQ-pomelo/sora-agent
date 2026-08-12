@@ -118,10 +118,13 @@ public class WorkflowLoader {
             log.warn("工作流文件缺少 name 或 steps，跳过: {}", source);
             return;
         }
-        boolean stepIdsValid = workflow.getSteps().stream()
-                .allMatch(s -> s != null && s.getId() != null && !s.getId().isBlank());
-        if (!stepIdsValid) {
-            log.warn("工作流步骤缺少 id，跳过: {}", source);
+        boolean stepsValid = workflow.getSteps().stream()
+                .allMatch(s -> s != null && s.getId() != null && !s.getId().isBlank()
+                        && s.getType() != null
+                        && ("tool".equalsIgnoreCase(s.getType().trim())
+                            || "llm".equalsIgnoreCase(s.getType().trim())));
+        if (!stepsValid) {
+            log.warn("工作流步骤缺少 id 或 type 非法（仅 tool/llm），跳过: {}", source);
             return;
         }
         workflows.put(workflow.getName(), workflow);
