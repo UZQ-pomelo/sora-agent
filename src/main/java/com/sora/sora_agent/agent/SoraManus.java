@@ -4,6 +4,8 @@ import com.sora.sora_agent.advisor.MyLoggerAdvisor;
 import com.sora.sora_agent.chatmemory.ConversationMemory;
 import com.sora.sora_agent.skill.Skill;
 import com.sora.sora_agent.skill.SkillLoader;
+import com.sora.sora_agent.multiagent.WorkerAgent;
+import com.sora.sora_agent.multiagent.WorkerAgentLoader;
 import com.sora.sora_agent.workflow.Workflow;
 import com.sora.sora_agent.workflow.WorkflowLoader;
 import lombok.Getter;
@@ -45,6 +47,14 @@ public class SoraManus extends ToolCallAgent {
 
     public void setWorkflowLoader(WorkflowLoader workflowLoader) {
         this.workflowLoader = workflowLoader;
+    }
+
+    /** 多 Agent 专家体系（可选；注入后 systemPrompt 追加可用专家清单） */
+    private WorkerAgentLoader agentLoader;
+    private boolean agentsInjected = false;
+
+    public void setAgentLoader(WorkerAgentLoader agentLoader) {
+        this.agentLoader = agentLoader;
     }
 
     /**
@@ -128,6 +138,8 @@ public class SoraManus extends ToolCallAgent {
                 injectSkillGuide();
                 // 注入可用工作流清单（若注入工作流体系）
                 injectWorkflowGuide();
+                // 注入可用专家清单（若注入多 Agent 体系）
+                injectAgentGuide();
                 // 载入会话历史（若开启记忆）
                 if (withMemory) {
                     List<Message> history = conversationMemory.load(conversationId);
@@ -241,6 +253,30 @@ public class SoraManus extends ToolCallAgent {
             sb.append("- ").append(w.getName()).append(": ").append(w.getDescription()).append("\n");
         }
         sb.append("\n当用户任务与某个工作流的标准流程匹配时，调用 runWorkflow(工作流名, 入参JSON) 运行它，不要自行临时发挥。");
+        this.setSystemPrompt(sb.toString());
+    }
+
+    /**
+     * 把可用专家清单（名称+描述）追加到 systemPrompt，引导 supervisor 自主委派。
+     */
+    private void injectAgentGuide() {
+        if (agentLoader == null || agentsInjected) {
+            return;
+        }
+        agentsInjected = true;
+        java.util.List<WorkerAgent> agentList = agentLoader.list();
+        if (agentList == null || agentList.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder(getSystemPrompt());
+        sb.append("\n\n【可用专家】\n");
+        for (WorkerAgent a : agentList) {
+            sb.append("- ").append(a.getName())
+                    .append(a.getDescription() == null || a.getDescription().isBlank() ? "" : ": " + a.getDescription())
+                    .append("\n");
+        }
+        sb.append("\n对复杂任务，先拆解，将子任务委派给合适的专家（delegate 工具，可并行），"
+                + "最后综合各专家结果给出完整回答。");
         this.setSystemPrompt(sb.toString());
     }
 

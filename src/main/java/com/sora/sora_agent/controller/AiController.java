@@ -12,6 +12,7 @@ import com.sora.sora_agent.model.dto.ConversationSummary;
 import com.sora.sora_agent.service.ConversationService;
 import com.sora.sora_agent.service.ModelFallbackService;
 import com.sora.sora_agent.service.ModelFallbackService.AllModelsFailedException;
+import com.sora.sora_agent.multiagent.WorkerAgentLoader;
 import com.sora.sora_agent.skill.SkillLoader;
 import com.sora.sora_agent.workflow.WorkflowEngine;
 import com.sora.sora_agent.workflow.WorkflowLoader;
@@ -71,6 +72,9 @@ public class AiController {
 
     @Resource
     private WorkflowEngine workflowEngine;
+
+    @Resource
+    private WorkerAgentLoader workerAgentLoader;
 
     /**
      * 获取可用模型列表。
@@ -226,6 +230,7 @@ public class AiController {
         soraManus.setConversationMemory(conversationMemory);
         soraManus.setSkillLoader(skillLoader);
         soraManus.setWorkflowLoader(workflowLoader);
+        soraManus.setAgentLoader(workerAgentLoader);
         // SoraManus.runStream() 内部已发送 model_info 事件
         return soraManus.runStream(message, chatId);
     }

@@ -1,6 +1,8 @@
 package com.sora.sora_agent.tool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sora.sora_agent.multiagent.DelegateTool;
+import com.sora.sora_agent.multiagent.WorkerExecutor;
 import com.sora.sora_agent.security.CommandGuard;
 import com.sora.sora_agent.security.SecurityProperties;
 import com.sora.sora_agent.skill.SkillLoader;
@@ -31,13 +33,16 @@ public class ToolRegistration {
     private final SecurityProperties security;
     private final SkillLoader skillLoader;
     private final WorkflowEngine workflowEngine;
+    private final WorkerExecutor workerExecutor;
     private final ObjectMapper objectMapper;
 
     public ToolRegistration(SecurityProperties security, SkillLoader skillLoader,
-                            WorkflowEngine workflowEngine, ObjectMapper objectMapper) {
+                            WorkflowEngine workflowEngine, WorkerExecutor workerExecutor,
+                            ObjectMapper objectMapper) {
         this.security = security;
         this.skillLoader = skillLoader;
         this.workflowEngine = workflowEngine;
+        this.workerExecutor = workerExecutor;
         this.objectMapper = objectMapper;
     }
 
@@ -89,6 +94,10 @@ public class ToolRegistration {
         // 工作流运行工具（恒注册，无害；workflows 清单由各 agent 注入 system prompt）
         tools.addAll(List.of(ToolCallbacks.from(
                 new RunWorkflowTool(workflowEngine, objectMapper), "runWorkflow")));
+
+        // 多 Agent 委派工具（恒注册；专家清单由 supervisor 注入 system prompt）
+        tools.addAll(List.of(ToolCallbacks.from(
+                new DelegateTool(workerExecutor, objectMapper), "delegate")));
 
         return tools.toArray(new ToolCallback[0]);
     }
