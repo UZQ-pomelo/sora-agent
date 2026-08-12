@@ -27,6 +27,20 @@ export interface AgentStateEvent {
   state: AgentState
 }
 
+/** 会话记录摘要 — 对应后端 GET /api/ai/manus/conversations */
+export interface ConversationSummary {
+  conversationId: string
+  title: string
+  messageCount: number
+  lastTime: string | null
+}
+
+/** 会话历史消息 — 对应后端 GET /api/ai/manus/conversations/{id}/messages */
+export interface HistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export type SSEEventType = 'message' | 'error' | 'open' | 'close'
 
 export interface SSEOptions {

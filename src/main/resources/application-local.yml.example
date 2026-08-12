@@ -31,12 +31,58 @@ spring:
     username: <你的 MySQL 用户名>
     password: <你的 MySQL 密码>
 
-# Exa 联网搜索（可选，不填则搜索功能不可用）
+# Exa 联网搜索（可选；不填则搜索工具不注册，应用照常启动）
 exa:
   api-key: <你的 Exa API Key>
 
 # 可随意添加模型（仅限阿里云百炼平台）
 app:
+  security:
+    # API Key 认证开关。默认开启；仅完全可信的内网环境才可显式设为 false
+    enabled: true
+    # 有效 API Key（至少一个；enabled=true 且为空时应用拒绝启动，避免裸奔）
+    api-keys:
+      - <你的 API Key，至少一个>
+    # 需要认证保护的请求路径（Ant 模式，相对 /api context-path）；静态资源/文档不在其中
+    protect-patterns:
+      - /ai/**
+      - /chat/**
+      - /image/**
+    # 跨域来源白名单（前端部署地址；认证走请求头，不再依赖 Cookie）
+    cors:
+      allowed-origins:
+        - http://localhost:5173
+        - http://127.0.0.1:5173
+    # 危险工具开关：默认全部关闭（关闭=不注册，模型不可见）。本地开发按需开启
+    tools:
+      file-read: false     # 文件读取（潜在信息泄露）
+      file-write: false    # 文件写入（潜在覆盖/写马）
+      download: false      # 资源下载（SSRF + 写盘）
+      scrape: false        # 网页抓取（SSRF 读取）
+      terminal:
+        enabled: false     # 终端命令执行（任意命令，最高风险）
+        allow-commands: [] # 可选命令前缀白名单；空=放行（开启工具者的责任）
+        timeout-seconds: 30
+        max-output-bytes: 204800
+    # 每 key 滑动窗口限流（防持 key 者刷爆付费 LLM 账单）
+    rate-limit:
+      enabled: true
+      per-key-per-minute: 60
+    # 图片代理受信中继：仅代理白名单内的图片域名（DashScope/OSS）
+    image-proxy:
+      allowed-hosts:
+        - dashscope-result-bj.oss-cn-beijing.aliyuncs.com
+        - '*.oss-cn-beijing.aliyuncs.com'
+  # 图片代理基础地址（部署时改为实际域名/端口，替代硬编码 localhost:8080）
+  image:
+    base-url: http://localhost:8080
+  # 会话记忆（Manus 智能体跨请求记忆 + 「对话记录」）
+  memory:
+    namespace: manus          # 会话命名空间（与其它 agent 类型隔离）
+    window-size: 20           # 上下文保留最近消息条数，超出则压缩为摘要
+    summarize-overflow: true  # 超窗是否生成摘要（关闭则直接丢弃超窗部分）
+    summarize-input-limit: 8000
+    title-max-length: 30      # 会话列表标题截断长度
   models:
     available:
       - name: deepseek-v3.2

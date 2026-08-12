@@ -3,22 +3,30 @@ package com.sora.sora_agent.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sora.sora_agent.agent.SoraManus;
 import com.sora.sora_agent.app.TourApp;
+import com.sora.sora_agent.chatmemory.ConversationMemory;
 import com.sora.sora_agent.common.BaseResponse;
 import com.sora.sora_agent.common.ThrowUtils;
 import com.sora.sora_agent.config.ModelConfig;
 import com.sora.sora_agent.exception.GlobalExceptionHandler;
+import com.sora.sora_agent.model.dto.ConversationSummary;
+import com.sora.sora_agent.service.ConversationService;
 import com.sora.sora_agent.service.ModelFallbackService;
 import com.sora.sora_agent.service.ModelFallbackService.AllModelsFailedException;
 import com.sora.sora_agent.service.ModelFallbackService.ModelAttempt;
 import com.sora.sora_agent.service.ModelFallbackService.StreamModelResult;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -45,6 +53,12 @@ public class AiController {
 
     @Resource
     private ModelFallbackService modelFallbackService;
+
+    @Resource
+    private ConversationMemory conversationMemory;
+
+    @Resource
+    private ConversationService conversationService;
 
     /**
      * 获取可用模型列表。
@@ -185,18 +199,48 @@ public class AiController {
      * 流式调用 Manus 超级智能体（Agent 场景，无 fallback，模型在任务期内锁死）。
      *
      * @param message 用户消息
+     * @param chatId  会话 id（可选；传则载入历史 + 结束后持久化，实现跨请求记忆）
      * @param model   模型名（可选，不传使用默认模型）
      */
     @GetMapping("/manus/chat")
     public SseEmitter doChatWithManus(
             @RequestParam String message,
+            @RequestParam(required = false) String chatId,
             @RequestParam(required = false) String model) {
         String targetModel = (model != null && !model.isBlank())
                 ? model
                 : modelConfig.getDefaultModel();
         SoraManus soraManus = new SoraManus(allTools, toolCallbacks, dashscopeChatModel, targetModel);
+        soraManus.setConversationMemory(conversationMemory);
         // SoraManus.runStream() 内部已发送 model_info 事件
-        return soraManus.runStream(message);
+        return soraManus.runStream(message, chatId);
+    }
+
+    /**
+     * 会话列表（供前端「对话记录」面板）。
+     */
+    @GetMapping("/manus/conversations")
+    public BaseResponse<List<ConversationSummary>> listManusConversations() {
+        return BaseResponse.success(conversationService.listConversations());
+    }
+
+    /**
+     * 拉取某会话的历史消息（供切换会话后渲染）。
+     */
+    @GetMapping("/manus/conversations/{conversationId}/messages")
+    public BaseResponse<List<Map<String, String>>> getManusConversationMessages(
+            @PathVariable String conversationId) {
+        List<Message> messages = conversationService.getHistory(conversationId);
+        List<Map<String, String>> dto = messages.stream()
+                .filter(m -> m instanceof UserMessage || m instanceof AssistantMessage)
+                .map(m -> {
+                    MessageType type = m.getType();
+                    return Map.of(
+                            "role", type == MessageType.USER ? "user" : "assistant",
+                            "content", m.getText() == null ? "" : m.getText());
+                })
+                .toList();
+        return BaseResponse.success(dto);
     }
 
     // ---- 私有工具方法 ----

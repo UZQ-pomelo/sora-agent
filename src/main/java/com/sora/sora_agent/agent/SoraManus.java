@@ -1,13 +1,17 @@
 package com.sora.sora_agent.agent;
 
 import com.sora.sora_agent.advisor.MyLoggerAdvisor;
+import com.sora.sora_agent.chatmemory.ConversationMemory;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.util.List;
 
 @Slf4j
 public class SoraManus extends ToolCallAgent {
@@ -15,6 +19,13 @@ public class SoraManus extends ToolCallAgent {
     /** 当前任务锁定的模型名（任务期内不变） */
     @Getter
     private final String lockedModel;
+
+    /** 会话记忆（可选；注入后支持跨请求持久化，否则维持无状态） */
+    private ConversationMemory conversationMemory;
+
+    public void setConversationMemory(ConversationMemory conversationMemory) {
+        this.conversationMemory = conversationMemory;
+    }
 
     /**
      * 构造 SoraManus 智能体。
@@ -59,9 +70,19 @@ public class SoraManus extends ToolCallAgent {
      */
     @Override
     public SseEmitter runStream(String userPrompt) {
+        return runStream(userPrompt, null);
+    }
+
+    /**
+     * 带会话记忆的流式运行：启动时载入历史，结束后持久化本轮新增消息。
+     * conversationId 为空时维持无状态（等价于 {@link #runStream(String)}）。
+     */
+    public SseEmitter runStream(String userPrompt, String conversationId) {
         SseEmitter emitter = new SseEmitter(300000L);
+        boolean withMemory = conversationId != null && !conversationId.isBlank() && conversationMemory != null;
 
         java.util.concurrent.CompletableFuture.runAsync(() -> {
+            int historySize = 0;
             try {
                 if (this.getState() != com.sora.sora_agent.agent.model.AgentState.IDLE) {
                     emitter.send("错误：无法从状态运行代理: " + this.getState());
@@ -83,6 +104,14 @@ public class SoraManus extends ToolCallAgent {
 
                 // 更改状态
                 this.setState(com.sora.sora_agent.agent.model.AgentState.RUNNING);
+                // 载入会话历史（若开启记忆）
+                if (withMemory) {
+                    List<Message> history = conversationMemory.load(conversationId);
+                    if (!history.isEmpty()) {
+                        this.getMessageList().addAll(history);
+                        historySize = history.size();
+                    }
+                }
                 this.getMessageList().add(new org.springframework.ai.chat.messages.UserMessage(userPrompt));
 
                 try {
@@ -132,6 +161,13 @@ public class SoraManus extends ToolCallAgent {
                     }
                 } finally {
                     this.cleanup();
+                    // 持久化本轮新增消息（仅 user/assistant 文本，工具调用不落库）
+                    if (withMemory) {
+                        List<Message> all = this.getMessageList();
+                        if (all.size() > historySize) {
+                            conversationMemory.save(conversationId, all.subList(historySize, all.size()));
+                        }
+                    }
                 }
             } catch (Exception e) {
                 emitter.completeWithError(e);

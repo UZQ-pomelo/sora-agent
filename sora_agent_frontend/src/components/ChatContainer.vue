@@ -1,9 +1,19 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onBeforeUnmount, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import ChatBubble from './ChatBubble.vue'
 import ChatInput from './ChatInput.vue'
+import ConversationListPanel from './ConversationListPanel.vue'
 import { createSSEConnection } from '@/utils/sse'
-import type { ChatMessage, AgentState, ModelOption, ModelInfo } from '@/types/chat'
+import { safeCopy } from '@/utils/clipboard'
+import type {
+  ChatMessage,
+  AgentState,
+  ModelOption,
+  ModelInfo,
+  ConversationSummary,
+  HistoryMessage,
+} from '@/types/chat'
 
 export interface ChatPageConfig {
   /** SSE URL builder: (message, chatId?, model?) => full URL */
@@ -14,6 +24,12 @@ export interface ChatPageConfig {
   title: string
   /** Page subtitle / description */
   subtitle: string
+  /** 是否显示「对话记录」按钮（会话管理能力，仅 Manus 页开启） */
+  showConversationList?: boolean
+  /** 会话列表接口地址 */
+  conversationsUrl?: string
+  /** 会话历史接口地址（用 {id} 占位会话 id） */
+  conversationMessagesUrl?: string
 }
 
 const props = defineProps<{
@@ -44,14 +60,29 @@ function onModelSelect(modelName: string) {
   currentModelInfo.value = null
 }
 
+// --- Route / session identity ---
+const route = useRoute()
+const router = useRouter()
+
+function resolveChatIdFromUrl(): string {
+  const q = route.query.chat
+  return typeof q === 'string' && q ? q : crypto.randomUUID()
+}
+
 // --- State ---
 const messages = ref<ChatMessage[]>([])
-const chatId = ref<string>(crypto.randomUUID())
+// 会话 id：优先从 URL（/manus?chat=xxx）恢复，否则新建
+const chatId = ref<string>(resolveChatIdFromUrl())
 const isStreaming = ref(false)
 const sseConnection = ref<{ abort: () => void } | null>(null)
 const agentState = ref<AgentState | null>(null)
 const messagesContainer = ref<HTMLElement | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
+
+// --- 对话记录 ---
+const conversations = ref<ConversationSummary[]>([])
+const conversationsLoading = ref(false)
+const showConversationPanel = ref(false)
 
 const hasMessages = computed(() => messages.value.length > 0)
 
@@ -143,15 +174,99 @@ function newConversation() {
   messages.value = []
   chatId.value = crypto.randomUUID()
   currentModelInfo.value = null
+  agentState.value = null
+  showConversationPanel.value = false
+  // 清除 URL 上的会话参数，回到全新会话
+  if (props.config.useChatId) {
+    router.replace({ query: {} })
+  }
 }
 
-function copyMessage(content: string) {
-  navigator.clipboard.writeText(content)
+async function copyMessage(content: string) {
+  await safeCopy(content)
 }
+
+// --- 对话记录 ---
+function toggleConversationPanel() {
+  showConversationPanel.value = !showConversationPanel.value
+  if (showConversationPanel.value && conversations.value.length === 0) {
+    fetchConversations()
+  }
+}
+
+async function fetchConversations() {
+  if (!props.config.conversationsUrl) return
+  conversationsLoading.value = true
+  try {
+    const resp = await fetch(props.config.conversationsUrl)
+    const json = await resp.json()
+    if (json?.data) {
+      conversations.value = json.data as ConversationSummary[]
+    }
+  } catch {
+    console.warn('获取会话列表失败')
+  } finally {
+    conversationsLoading.value = false
+  }
+}
+
+async function switchConversation(id: string) {
+  if (id === chatId.value && messages.value.length > 0) {
+    showConversationPanel.value = false
+    return
+  }
+  if (isStreaming.value) {
+    stopStreaming()
+  }
+  chatId.value = id
+  currentModelInfo.value = null
+  agentState.value = null
+  if (props.config.useChatId) {
+    router.replace({ query: { chat: id } })
+  }
+  await loadHistory(id)
+  showConversationPanel.value = false
+}
+
+async function loadHistory(id: string) {
+  if (!props.config.conversationMessagesUrl) return
+  try {
+    const url = props.config.conversationMessagesUrl.replace('{id}', encodeURIComponent(id))
+    const resp = await fetch(url)
+    const json = await resp.json()
+    if (json?.data) {
+      const history = json.data as HistoryMessage[]
+      messages.value = history.map((m) => ({
+        id: crypto.randomUUID(),
+        role: m.role,
+        content: m.content,
+        timestamp: Date.now(),
+      }))
+    }
+  } catch {
+    console.warn('加载会话历史失败')
+  }
+}
+
+// 浏览器前进/后退导致的 chat 参数变化 → 切换会话（switchConversation 内已有防抖守卫）
+watch(
+  () => route.query.chat,
+  (v) => {
+    const cid = typeof v === 'string' && v ? v : null
+    if (cid && cid !== chatId.value) {
+      switchConversation(cid)
+    }
+  },
+)
 
 // --- Lifecycle ---
 onMounted(() => {
   fetchModels()
+  // 若 URL 带了 chat 参数，恢复该会话历史
+  const q = route.query.chat
+  if (typeof q === 'string' && q && props.config.useChatId) {
+    loadHistory(q)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -193,7 +308,7 @@ defineExpose({ newConversation })
           </div>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 relative">
           <!-- Model selector -->
           <select
             v-model="selectedModel"
@@ -213,6 +328,23 @@ defineExpose({ newConversation })
             </option>
           </select>
 
+          <!-- Conversation history button -->
+          <button
+            v-if="config.showConversationList"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
+                   text-warm-500 hover:text-accent-600 hover:bg-accent-50
+                   rounded-lg transition-colors duration-150 shrink-0"
+            title="对话记录"
+            @click="toggleConversationPanel"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="16" rx="2"/>
+              <line x1="8" y1="9" x2="16" y2="9"/>
+              <line x1="8" y1="13" x2="13" y2="13"/>
+            </svg>
+            <span>对话记录</span>
+          </button>
+
           <!-- New conversation button -->
           <button
             class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
@@ -226,6 +358,17 @@ defineExpose({ newConversation })
             </svg>
             <span>新建对话</span>
           </button>
+
+          <!-- Conversation list panel -->
+          <ConversationListPanel
+            v-if="config.showConversationList"
+            :visible="showConversationPanel"
+            :loading="conversationsLoading"
+            :conversations="conversations"
+            :active-id="chatId"
+            @select="switchConversation"
+            @close="showConversationPanel = false"
+          />
         </div>
       </div>
     </header>

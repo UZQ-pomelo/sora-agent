@@ -111,6 +111,13 @@ cp src/main/resources/mcp-servers.json.example src/main/resources/mcp-servers.js
 # 然后编辑这两个文件，填入你的 API Key 和数据库连接信息
 ```
 
+> **安全配置（必读）**：默认启用 API Key 认证。`application-local.yml` 的
+> `app.security.api-keys` 至少配置一个 key，否则应用**拒绝启动**（fail-fast，防裸奔）。
+> 开发模式下由前端 vite 代理注入 key（见 `sora_agent_frontend/.env.example` 的 `VITE_API_KEY`）；
+> 生产部署由反向代理统一注入 `X-API-Key` 请求头。
+> 危险工具（终端/文件/下载/抓取）默认全部关闭，按需在 `app.security.tools.*` 显式开启。
+> 完整验收清单见 [docs/security-checklist.md](docs/security-checklist.md)。
+
 ### 5 分钟体验模式
 
 此模式跳过 RAG 和数据库，只需 Java 和 Node.js，仅需配置 API Key。

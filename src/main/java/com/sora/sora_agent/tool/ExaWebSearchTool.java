@@ -9,8 +9,6 @@ import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -21,9 +19,12 @@ import java.util.Map;
  * 通过 Exa API 执行网络搜索, 大模型在需要实时信息时会自动调用此工具。
  * 使用 highlights 模式返回查询相关摘录, Token 用量可控。
  * </p>
+ * <p>
+ * 该工具不再作为 Spring Bean 注册；由 {@code ToolRegistration} 按配置决定是否注册。
+ * 缺 key 时工具不注册（应用照常启动，仅搜索能力不可用）。
+ * </p>
  */
 @Slf4j
-@Component
 public class ExaWebSearchTool {
 
     private final String exaApiKey;
@@ -31,7 +32,7 @@ public class ExaWebSearchTool {
     private static final String SEARCH_API_URL = "https://api.exa.ai/search";
     private static final int DEFAULT_NUM_RESULTS = 5;
 
-    public ExaWebSearchTool(@Value("${exa.api-key}") String exaApiKey) {
+    public ExaWebSearchTool(String exaApiKey) {
         this.exaApiKey = exaApiKey;
     }
 

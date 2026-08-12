@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -25,6 +26,10 @@ import java.util.List;
 public class ToolConfig {
 
     private final ImageGenerationService imageGenerationService;
+
+    /** 图片代理基础地址（部署时配置，替代硬编码 localhost:8080）。 */
+    @Value("${app.image.base-url:http://localhost:8080}")
+    private String imageBaseUrl;
 
     /**
      * 根据文字描述生成图片。
@@ -51,7 +56,7 @@ public class ToolConfig {
         result.append("已成功生成 ").append(urls.size()).append(" 张图片:\n");
         for (int i = 0; i < urls.size(); i++) {
             result.append("图片").append(i + 1).append(": ");
-            result.append("http://localhost:8080/api/image/proxy?url=").append(urls.get(i));
+            result.append(imageBaseUrl).append("/api/image/proxy?url=").append(urls.get(i));
             result.append("\n原始URL: ").append(urls.get(i)).append("\n");
         }
         result.append("请将代理链接以可点击形式展示给用户, 同时附上原始URL。");

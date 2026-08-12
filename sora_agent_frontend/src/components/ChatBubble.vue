@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import MarkdownIt from 'markdown-it'
 import type { ChatMessage, AgentState, ModelInfo } from '@/types/chat'
+import { safeCopy } from '@/utils/clipboard'
 
 const props = defineProps<{
   message: ChatMessage
@@ -24,6 +25,13 @@ const md = new MarkdownIt({
   typographer: true,
   breaks: true,
 })
+
+// 安全加固：linkify 生成的链接强制新标签打开并禁止 opener 窃取（反向 tabnabbing）
+md.renderer.rules.link_open = (tokens, idx, _options, _env, self) => {
+  tokens[idx].attrSet('target', '_blank')
+  tokens[idx].attrSet('rel', 'noopener noreferrer')
+  return self.renderToken(tokens, idx, _options)
+}
 
 const renderedContent = computed(() => {
   if (props.message.role === 'user') {
@@ -76,8 +84,8 @@ function onCopy() {
   }, 2000)
 }
 
-function onCopyCode(code: string) {
-  navigator.clipboard.writeText(code)
+async function onCopyCode(code: string) {
+  await safeCopy(code)
   copiedCode.value = code
   setTimeout(() => {
     copiedCode.value = null

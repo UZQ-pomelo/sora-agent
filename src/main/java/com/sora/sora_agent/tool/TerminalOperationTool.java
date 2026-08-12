@@ -1,65 +1,84 @@
 package com.sora.sora_agent.tool;
 
+import com.sora.sora_agent.security.CommandGuard;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
- * 基于Java的Process API实现的命令行操作工具    Windows
+ * 终端命令执行工具（Windows，cmd.exe）。
+ *
+ * <p>安全加固：可选命令前缀白名单 + 强制超时 + stderr 合并防死锁 + 输出上限截断。</p>
+ *
+ * <p><b>风险提示</b>：终端工具是最高风险工具，默认不注册；仅在配置显式开启后可用。
+ * 前缀白名单属于附加加固而非可靠防线。</p>
  */
-
 public class TerminalOperationTool {
+
+    private final CommandGuard commandGuard;
+    private final long timeoutSeconds;
+    private final long maxOutputChars;
+
+    public TerminalOperationTool(CommandGuard commandGuard, long timeoutSeconds, long maxOutputChars) {
+        this.commandGuard = commandGuard;
+        this.timeoutSeconds = timeoutSeconds;
+        this.maxOutputChars = maxOutputChars;
+    }
 
     @Tool(description = "在终端命令行执行命令")
     public String executeTerminalCommand(@ToolParam(description = "需要在终端执行的命令") String command) {
-        StringBuilder output = new StringBuilder();
+        if (command == null || command.isBlank()) {
+            return "执行命令错误: 命令不能为空";
+        }
+        if (!commandGuard.isAllowed(command)) {
+            return "命令被拒绝: 不在允许的命令前缀白名单内";
+        }
         try {
             ProcessBuilder builder = new ProcessBuilder("cmd.exe", "/c", command);
-//            Process process = Runtime.getRuntime().exec(command);
+            builder.redirectErrorStream(true); // 合并 stderr，避免管道缓冲死锁
             Process process = builder.start();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            try {
+                Future<String> outputFuture = executor.submit(() -> readOutput(process.getInputStream(), maxOutputChars));
+                boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+                if (!finished) {
+                    process.destroyForcibly();
+                    return "命令超时(>" + timeoutSeconds + "s)，已强制终止";
                 }
+                String output = outputFuture.get(5, TimeUnit.SECONDS);
+                int exitCode = process.exitValue();
+                String prefix = exitCode == 0 ? "" : "命令执行失败, 退出码: " + exitCode + "\n";
+                return prefix + output;
+            } finally {
+                executor.shutdownNow();
             }
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                output.append("命令执行失败: ").append(exitCode);
-            }
-        } catch (IOException | InterruptedException e) {
-            output.append("执行命令错误: ").append(e.getMessage());
+        } catch (Exception e) {
+            return "执行命令错误: " + e.getMessage();
         }
-        return output.toString();
+    }
+
+    private String readOutput(InputStream in, long maxChars) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        char[] buf = new char[8192];
+        long total = 0;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(in))) {
+            int n;
+            while ((n = reader.read(buf)) != -1) {
+                total += n;
+                if (total > maxChars) {
+                    return "……输出超限(" + maxChars + " 字符)已截断……";
+                }
+                sb.append(buf, 0, n);
+            }
+        }
+        return sb.toString();
     }
 }
-/**
- * 以下是其他操作系统的
- */
-//public class TerminalOperationTool {
-//
-//    @Tool(description = "在终端命令行执行命令")
-//    public String executeTerminalCommand(@ToolParam(description = "需要在终端执行的命令") String command) {
-//        StringBuilder output = new StringBuilder();
-//        try {
-//            Process process = Runtime.getRuntime().exec(command);
-//            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-//                String line;
-//                while ((line = reader.readLine()) != null) {
-//                    output.append(line).append("\n");
-//                }
-//            }
-//            int exitCode = process.waitFor();
-//            if (exitCode != 0) {
-//                output.append("命令执行失败: ").append(exitCode);
-//            }
-//        } catch (IOException | InterruptedException e) {
-//            output.append("执行命令错误: ").append(e.getMessage());
-//        }
-//        return output.toString();
-//    }
-//}
-

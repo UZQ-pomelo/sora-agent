@@ -36,3 +36,9 @@ build/
 **/application-local.yml
 tmp
 **/mcp-servers.json
+
+### Secrets ###
+**/.env
+**/.env.local
+**/.env.*
+!**/.env.example
