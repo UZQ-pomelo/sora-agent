@@ -40,9 +40,13 @@ public class SecurityProperties {
     /** 有效 API Key 列表（enabled=true 时至少配置一个，否则启动失败）。 */
     private List<String> apiKeys = new ArrayList<>();
 
-    /** 需要认证保护的请求路径（Ant 模式，相对 context-path）。静态资源/文档默认不在其中。 */
+    /**
+     * 需要认证保护的请求路径（Ant 模式，相对 context-path）。
+     * 静态资源/文档默认不在其中；/image/**（图片代理）默认豁免认证——
+     * 它是受信中继（域名白名单+内容类型校验+大小上限），且浏览器 &lt;img&gt; 无法携带请求头。
+     */
     private List<String> protectPatterns = new ArrayList<>(List.of(
-            "/ai/**", "/chat/**", "/image/**"));
+            "/ai/**", "/chat/**"));
 
     /** CORS 跨域来源配置。 */
     private Cors cors = new Cors();

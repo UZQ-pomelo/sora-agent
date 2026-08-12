@@ -43,11 +43,10 @@ app:
     # 有效 API Key（至少一个；enabled=true 且为空时应用拒绝启动，避免裸奔）
     api-keys:
       - <你的 API Key，至少一个>
-    # 需要认证保护的请求路径（Ant 模式，相对 /api context-path）；静态资源/文档不在其中
+    # 需要认证保护的请求路径（Ant 模式，相对 /api context-path）；静态资源/文档与 /image/**（图片代理，受信中继）默认不在其中
     protect-patterns:
       - /ai/**
       - /chat/**
-      - /image/**
     # 跨域来源白名单（前端部署地址；认证走请求头，不再依赖 Cookie）
     cors:
       allowed-origins:
