@@ -1,7 +1,10 @@
 package com.sora.sora_agent.security;
 
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+
+import java.io.IOException;
 
 /**
  * 路径安全工具：将不可信的文件名安全解析到指定沙箱目录内，防止路径穿越。
@@ -50,6 +53,17 @@ public final class PathSafety {
         Path resolved = base.resolve(fileNamePath).normalize();
         if (!resolved.startsWith(base)) {
             throw new IllegalArgumentException("路径越界: " + fileName);
+        }
+        // 已存在的文件做 realpath 校验，防符号链接指向沙箱外
+        try {
+            if (Files.exists(resolved)) {
+                Path real = resolved.toRealPath();
+                if (!real.startsWith(base)) {
+                    throw new IllegalArgumentException("路径越界(符号链接): " + fileName);
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalArgumentException("路径校验失败: " + fileName, e);
         }
         return resolved;
     }

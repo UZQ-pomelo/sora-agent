@@ -44,8 +44,11 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         if (!props.isEnabled()) {
             return true;
         }
-        // 去掉 context-path 后按 Ant 模式匹配
-        String path = request.getRequestURI().substring(request.getContextPath().length());
+        // 去掉 context-path 后按 Ant 模式匹配（context-path 为根/空时不裁剪，避免误匹配）
+        String contextPath = request.getContextPath();
+        String path = (contextPath == null || contextPath.isEmpty() || "/".equals(contextPath))
+                ? request.getRequestURI()
+                : request.getRequestURI().substring(contextPath.length());
         List<String> patterns = props.getProtectPatterns();
         if (patterns == null || patterns.isEmpty()) {
             return false; // 空列表 = 保护所有请求（安全默认，避免空配置静默绕过认证）
