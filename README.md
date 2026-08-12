@@ -113,7 +113,7 @@ cp src/main/resources/mcp-servers.json.example src/main/resources/mcp-servers.js
 
 > **安全配置（必读）**：默认启用 API Key 认证。`application-local.yml` 的
 > `app.security.api-keys` 至少配置一个 key，否则应用**拒绝启动**（fail-fast，防裸奔）。
-> 开发模式下由前端 vite 代理注入 key（见 `sora_agent_frontend/.env.example` 的 `VITE_API_KEY`）；
+> 开发模式下由前端 vite 代理注入 key（见 `sora_agent_frontend/.env.example` 的 `SORA_API_KEY`，注意必须用非 `VITE_` 前缀以免暴露进浏览器）；
 > 生产部署由反向代理统一注入 `X-API-Key` 请求头。
 > 危险工具（终端/文件/下载/抓取）默认全部关闭，按需在 `app.security.tools.*` 显式开启。
 > 完整验收清单见 [docs/security-checklist.md](docs/security-checklist.md)。
