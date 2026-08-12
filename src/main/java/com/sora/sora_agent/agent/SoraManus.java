@@ -197,11 +197,13 @@ public class SoraManus extends ToolCallAgent {
                     }
                 } finally {
                     this.cleanup();
-                    // 持久化本轮新增消息（仅 user/assistant 文本，工具调用不落库）
+                    // 持久化本轮新增消息（仅 user/assistant 文本，工具调用不落库；
+                    // 排除内部注入的 nextStepPrompt，避免污染会话记忆）
                     if (withMemory) {
                         List<Message> all = this.getMessageList();
                         if (all.size() > historySize) {
-                            conversationMemory.save(conversationId, all.subList(historySize, all.size()));
+                            List<Message> newMessages = all.subList(historySize, all.size());
+                            conversationMemory.save(conversationId, filterInternalPrompts(newMessages));
                         }
                     }
                 }
@@ -233,6 +235,20 @@ public class SoraManus extends ToolCallAgent {
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
                 .replace("\r", "\\r");
+    }
+
+    /**
+     * 过滤掉内部注入的 nextStepPrompt 用户消息（agent 的思考提示，不是真实对话内容）。
+     */
+    private List<Message> filterInternalPrompts(List<Message> messages) {
+        String nextStep = getNextStepPrompt();
+        if (nextStep == null || nextStep.isBlank()) {
+            return messages;
+        }
+        return messages.stream()
+                .filter(m -> !(m instanceof org.springframework.ai.chat.messages.UserMessage
+                        && nextStep.equals(m.getText())))
+                .toList();
     }
 
     /**
