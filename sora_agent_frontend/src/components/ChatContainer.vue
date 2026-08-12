@@ -102,8 +102,16 @@ function scrollToBottom(smooth = true) {
 watch(messages, () => scrollToBottom(), { deep: true })
 
 // --- SSE ---
-function sendMessage(text: string) {
-  if (isStreaming.value || !text.trim()) return
+function sendMessage(rawText: string) {
+  if (isStreaming.value || !rawText.trim()) return
+
+  // /skill名 斜杠命令 → 显式激活技能
+  let text = rawText
+  const skillMatch = text.trim().match(/^\/skill\s+(\S+)/)
+  if (skillMatch) {
+    const skillName = skillMatch[1]
+    text = `请激活并使用技能「${skillName}」，按该技能的指南完成任务`
+  }
 
   // Add user message
   const userMsg: ChatMessage = {

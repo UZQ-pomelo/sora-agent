@@ -2,6 +2,8 @@ package com.sora.sora_agent.agent;
 
 import com.sora.sora_agent.advisor.MyLoggerAdvisor;
 import com.sora.sora_agent.chatmemory.ConversationMemory;
+import com.sora.sora_agent.skill.Skill;
+import com.sora.sora_agent.skill.SkillLoader;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -25,6 +27,14 @@ public class SoraManus extends ToolCallAgent {
 
     public void setConversationMemory(ConversationMemory conversationMemory) {
         this.conversationMemory = conversationMemory;
+    }
+
+    /** 技能体系（可选；注入后 systemPrompt 追加可用技能清单） */
+    private SkillLoader skillLoader;
+    private boolean skillsInjected = false;
+
+    public void setSkillLoader(SkillLoader skillLoader) {
+        this.skillLoader = skillLoader;
     }
 
     /**
@@ -104,6 +114,8 @@ public class SoraManus extends ToolCallAgent {
 
                 // 更改状态
                 this.setState(com.sora.sora_agent.agent.model.AgentState.RUNNING);
+                // 注入可用技能清单（若注入技能体系）
+                injectSkillGuide();
                 // 载入会话历史（若开启记忆）
                 if (withMemory) {
                     List<Message> history = conversationMemory.load(conversationId);
@@ -197,6 +209,27 @@ public class SoraManus extends ToolCallAgent {
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
                 .replace("\r", "\\r");
+    }
+
+    /**
+     * 把可用技能清单（名称+描述）追加到 systemPrompt，引导模型自主触发 useSkill。
+     */
+    private void injectSkillGuide() {
+        if (skillLoader == null || skillsInjected) {
+            return;
+        }
+        skillsInjected = true;
+        java.util.List<Skill> skillList = skillLoader.list();
+        if (skillList == null || skillList.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder(getSystemPrompt());
+        sb.append("\n\n【可用技能】\n");
+        for (Skill s : skillList) {
+            sb.append("- ").append(s.getName()).append(": ").append(s.getDescription()).append("\n");
+        }
+        sb.append("\n当用户任务与某个技能匹配时，先调用 useSkill(技能名) 激活，再严格按该技能指南执行。");
+        this.setSystemPrompt(sb.toString());
     }
 
     /**

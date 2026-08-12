@@ -12,6 +12,7 @@ import com.sora.sora_agent.model.dto.ConversationSummary;
 import com.sora.sora_agent.service.ConversationService;
 import com.sora.sora_agent.service.ModelFallbackService;
 import com.sora.sora_agent.service.ModelFallbackService.AllModelsFailedException;
+import com.sora.sora_agent.skill.SkillLoader;
 import com.sora.sora_agent.service.ModelFallbackService.ModelAttempt;
 import com.sora.sora_agent.service.ModelFallbackService.StreamModelResult;
 import jakarta.annotation.Resource;
@@ -59,6 +60,9 @@ public class AiController {
 
     @Resource
     private ConversationService conversationService;
+
+    @Resource
+    private SkillLoader skillLoader;
 
     /**
      * 获取可用模型列表。
@@ -212,6 +216,7 @@ public class AiController {
                 : modelConfig.getDefaultModel();
         SoraManus soraManus = new SoraManus(allTools, toolCallbacks, dashscopeChatModel, targetModel);
         soraManus.setConversationMemory(conversationMemory);
+        soraManus.setSkillLoader(skillLoader);
         // SoraManus.runStream() 内部已发送 model_info 事件
         return soraManus.runStream(message, chatId);
     }

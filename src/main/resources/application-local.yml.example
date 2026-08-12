@@ -76,6 +76,11 @@ app:
   # 图片代理基础地址（部署时改为实际域名/端口，替代硬编码 localhost:8080）
   image:
     base-url: http://localhost:8080
+  # 技能体系（声明式能力包）：把 skill YAML 放进目录即可用（重启后生效）
+  skill:
+    enabled: true
+    # 额外技能目录（文件系统路径，可选）；留空则只加载 classpath 内置技能 src/main/resources/skills/
+    # dir: ./skills
   # 会话记忆（Manus 智能体跨请求记忆 + 「对话记录」）
   memory:
     namespace: manus          # 会话命名空间（与其它 agent 类型隔离）

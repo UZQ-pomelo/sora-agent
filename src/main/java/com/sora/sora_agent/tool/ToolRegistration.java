@@ -2,6 +2,8 @@ package com.sora.sora_agent.tool;
 
 import com.sora.sora_agent.security.CommandGuard;
 import com.sora.sora_agent.security.SecurityProperties;
+import com.sora.sora_agent.skill.SkillLoader;
+import com.sora.sora_agent.skill.UseSkillTool;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,9 +26,11 @@ public class ToolRegistration {
     private String exaApiKey;
 
     private final SecurityProperties security;
+    private final SkillLoader skillLoader;
 
-    public ToolRegistration(SecurityProperties security) {
+    public ToolRegistration(SecurityProperties security, SkillLoader skillLoader) {
         this.security = security;
+        this.skillLoader = skillLoader;
     }
 
     @Bean
@@ -70,6 +74,9 @@ public class ToolRegistration {
         // 无害工具恒注册
         tools.addAll(List.of(ToolCallbacks.from(new PDFGenerationTool(), "generatePDF")));
         tools.addAll(List.of(ToolCallbacks.from(new TerminateTool(), "doTerminate")));
+
+        // 技能激活工具（恒注册，无害；skills 清单由各 agent 注入 system prompt）
+        tools.addAll(List.of(ToolCallbacks.from(new UseSkillTool(skillLoader), "useSkill")));
 
         return tools.toArray(new ToolCallback[0]);
     }
