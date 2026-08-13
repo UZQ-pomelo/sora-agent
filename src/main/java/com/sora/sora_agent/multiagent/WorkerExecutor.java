@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -43,11 +44,14 @@ public class WorkerExecutor {
             return List.of();
         }
         long timeoutSeconds = Math.max(props.getDelegationTimeoutSeconds(), 1L);
-        // 虚拟线程：worker 也是 I/O 密集（LLM 阻塞），并发由 LlmLimitedChatModel 信号量统一约束
+        // 虚拟线程：worker 是 I/O 密集（LLM 阻塞），但每批仍用信号量限制并发数，
+        // 避免单次委派起海量虚拟线程；真实 LLM 并发再由 LlmLimitedChatModel 统一约束
+        int maxConcurrent = Math.max(props.getMaxConcurrency(), 1);
+        Semaphore workerLimit = new Semaphore(maxConcurrent);
         ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
         try {
             List<CompletableFuture<DelegationResult>> futures = delegations.stream()
-                    .map(d -> CompletableFuture.supplyAsync(() -> runOne(d), pool))
+                    .map(d -> CompletableFuture.supplyAsync(() -> runOneLimited(d, workerLimit), pool))
                     .toList();
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
             List<DelegationResult> results = new ArrayList<>(delegations.size());
@@ -71,6 +75,20 @@ public class WorkerExecutor {
             return results;
         } finally {
             pool.shutdownNow();
+        }
+    }
+
+    private DelegationResult runOneLimited(Delegation d, Semaphore workerLimit) {
+        try {
+            workerLimit.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new DelegationResult(d.worker(), d.task(), "执行被中断");
+        }
+        try {
+            return runOne(d);
+        } finally {
+            workerLimit.release();
         }
     }
 
