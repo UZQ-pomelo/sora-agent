@@ -11,7 +11,7 @@ instruction: |
   4. 最后输出结构化报告，包含：调研结论摘要、要点清单、信息来源链接列表。
 tools:
   - searchweb
-  - webScraping
+  - scrapeWebPage
 examples:
   - "帮我调研一下某技术的最新进展和版本"
   - "收集最近一周的行业新闻并整理成简报"

@@ -78,10 +78,8 @@ public class DefaultWorkerRunner implements WorkerRunner {
             forbidden.addAll(forbiddenTools);
         }
         if (whitelist == null || whitelist.isEmpty()) {
-            // 空 = 全部可用，但排除禁调工具
-            return Arrays.stream(all)
-                    .filter(t -> !forbidden.contains(t.getToolDefinition().name()))
-                    .toArray(ToolCallback[]::new);
+            // 空 = 禁用一切（安全默认：worker 必须显式列出可用工具）
+            return new ToolCallback[0];
         }
         return Arrays.stream(all)
                 .filter(t -> whitelist.contains(t.getToolDefinition().name()))

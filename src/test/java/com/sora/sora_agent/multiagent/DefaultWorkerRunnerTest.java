@@ -69,7 +69,7 @@ class DefaultWorkerRunnerTest {
     }
 
     @Test
-    void emptyWhitelistKeepsAllExceptForbidden() {
+    void emptyWhitelistDeniesAll() {
         ToolCallback[] tools = new ToolCallback[]{
                 tool("searchweb"), tool("executeTerminalCommand"), tool("delegate")};
         when(toolProvider.getIfAvailable()).thenReturn(tools);
@@ -84,7 +84,8 @@ class DefaultWorkerRunnerTest {
                 .map(t -> t.getToolDefinition().name())
                 .toList();
 
-        assertEquals(List.of("searchweb"), names);
+        // 空白名单 = 禁用一切（安全默认：worker 必须显式列出可用工具）
+        assertEquals(List.of(), names);
     }
 
     @Test

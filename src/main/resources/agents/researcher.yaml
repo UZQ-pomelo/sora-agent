@@ -9,5 +9,5 @@ role: |
   任务完成后直接给出最终调研结果，不要询问。
 tools:
   - searchweb
-  - webScraping
+  - scrapeWebPage
 max-steps: 10            # 硬性限制：worker 最多 10 步

@@ -67,6 +67,8 @@ app:
     rate-limit:
       enabled: true
       per-key-per-minute: 60
+    # 是否把 MCP 工具合并进 agent（默认关）。MCP 工具不经 app.security.tools.* 开关过滤，属外部能力
+    enable-mcp-tools: false
     # 图片代理受信中继：仅代理白名单内的图片域名（DashScope/OSS）
     image-proxy:
       allowed-hosts:

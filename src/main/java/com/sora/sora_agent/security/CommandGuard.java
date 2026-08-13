@@ -22,6 +22,9 @@ public final class CommandGuard {
                 : List.copyOf(allowPrefixes);
     }
 
+    /** cmd.exe 元字符：出现即视为危险（可拼接额外命令），白名单模式下直接拒绝。 */
+    private static final String CMD_METACHARS = "&|<>^%";
+
     /**
      * @return 命令是否被允许执行
      */
@@ -33,6 +36,12 @@ public final class CommandGuard {
             return false;
         }
         String cmd = command.trim();
+        // 拒绝 cmd 元字符，防 `git & powershell -c ...` 之类绕过前缀白名单
+        for (char c : cmd.toCharArray()) {
+            if (CMD_METACHARS.indexOf(c) >= 0) {
+                return false;
+            }
+        }
         String lower = cmd.toLowerCase();
         for (String prefix : allowPrefixes) {
             String p = prefix.trim();

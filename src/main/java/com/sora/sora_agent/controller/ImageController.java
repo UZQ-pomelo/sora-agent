@@ -1,6 +1,8 @@
 package com.sora.sora_agent.controller;
 
+import com.sora.sora_agent.security.RateLimiter;
 import com.sora.sora_agent.security.SecurityProperties;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +15,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.util.concurrent.Semaphore;
 
 /**
  * 图片接口 — 受信中继。
@@ -33,12 +36,28 @@ public class ImageController {
     private static final int CONNECT_TIMEOUT_MS = 5000;
     private static final int READ_TIMEOUT_MS = 15000;
 
+    /** 图片代理按 IP 限流（/image/** 豁免认证，需独立防滥用） */
+    private static final int RATE_PER_MIN = 30;
+    private static final int MAX_CONCURRENCY = 16;
+
     private final SecurityProperties securityProperties;
+    private final RateLimiter ipRateLimiter = new RateLimiter();
+    private final Semaphore imageConcurrency = new Semaphore(MAX_CONCURRENCY);
 
     @GetMapping("/proxy")
-    public void proxy(@RequestParam String imageUrl, HttpServletResponse response) {
-        String current = imageUrl;
+    public void proxy(@RequestParam String imageUrl, HttpServletRequest request, HttpServletResponse response) {
+        // 独立限流 + 并发上限（该端点豁免认证）
+        String ip = request.getRemoteAddr();
+        if (!ipRateLimiter.tryAcquire(ip == null ? "unknown" : ip, RATE_PER_MIN, 60_000L)) {
+            response.setStatus(429); // SC_TOO_MANY_REQUESTS 在部分 servlet 版本缺失
+            return;
+        }
+        if (!imageConcurrency.tryAcquire()) {
+            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            return;
+        }
         try {
+            String current = imageUrl;
             for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
                 URI uri = URI.create(current);
                 String scheme = uri.getScheme();
@@ -76,7 +95,7 @@ public class ImageController {
                 }
 
                 String contentType = conn.getContentType();
-                if (contentType == null || !contentType.toLowerCase().startsWith("image/")) {
+                if (contentType == null || !isAllowedImageType(contentType)) {
                     conn.disconnect();
                     response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
                     return;
@@ -100,6 +119,7 @@ public class ImageController {
                     return;
                 }
                 response.setContentType(contentType);
+                response.setHeader("X-Content-Type-Options", "nosniff");
                 response.setHeader("Cache-Control", "private, max-age=3600");
                 response.setContentLength(body.length);
                 response.getOutputStream().write(body);
@@ -112,7 +132,23 @@ public class ImageController {
             if (!response.isCommitted()) {
                 response.setStatus(HttpServletResponse.SC_NOT_FOUND);
             }
+        } finally {
+            imageConcurrency.release();
         }
+    }
+
+    /**
+     * 仅允许光栅图片类型，拒绝 image/svg+xml 等可执行内容（防 SVG-XSS：
+     * SVG 内嵌脚本会在同源部署下以应用源执行）。
+     */
+    private boolean isAllowedImageType(String contentType) {
+        if (contentType == null) {
+            return false;
+        }
+        String ct = contentType.toLowerCase();
+        return ct.startsWith("image/jpeg") || ct.startsWith("image/jpg")
+                || ct.startsWith("image/png") || ct.startsWith("image/gif")
+                || ct.startsWith("image/webp") || ct.startsWith("image/bmp");
     }
 
     private boolean isAllowedHost(String host) {

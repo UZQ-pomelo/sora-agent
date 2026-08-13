@@ -46,7 +46,8 @@ public class SecurityProperties {
      * 它是受信中继（域名白名单+内容类型校验+大小上限），且浏览器 &lt;img&gt; 无法携带请求头。
      */
     private List<String> protectPatterns = new ArrayList<>(List.of(
-            "/ai/**", "/chat/**"));
+            "/ai/**", "/chat/**",
+            "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/doc.html"));
 
     /** CORS 跨域来源配置。 */
     private Cors cors = new Cors();
@@ -56,6 +57,12 @@ public class SecurityProperties {
 
     /** 每 key 速率限制。 */
     private RateLimit rateLimit = new RateLimit();
+
+    /**
+     * 是否把 MCP 工具合并进 agent（默认关）。
+     * MCP 工具不经过 app.security.tools.* 本地开关过滤，属外部能力；默认不合并。
+     */
+    private boolean enableMcpTools = false;
 
     /** 图片代理（受信中继）配置。 */
     private ImageProxy imageProxy = new ImageProxy();

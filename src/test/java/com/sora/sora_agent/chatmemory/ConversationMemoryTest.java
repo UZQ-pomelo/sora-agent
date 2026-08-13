@@ -69,24 +69,24 @@ class ConversationMemoryTest {
     @Test
     void loadReturnsAllWhenWithinWindow() {
         List<Message> stored = msgs(5);
-        when(chatMemory.get("manus:abc")).thenReturn(stored);
-        assertEquals(stored.size(), memory.load("abc").size());
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(stored);
+        assertEquals(stored.size(), memory.load("abc", "tenant1").size());
     }
 
     @Test
     void loadReturnsEmptyWhenNothingStored() {
-        when(chatMemory.get("manus:abc")).thenReturn(List.of());
-        assertTrue(memory.load("abc").isEmpty());
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(List.of());
+        assertTrue(memory.load("abc", "tenant1").isEmpty());
     }
 
     @Test
     void loadSummarizesOverflowAndInjectsSystemMessage() {
         props.setWindowSize(2); // 保留最近 2 条（1 轮 user+assistant）
         List<Message> stored = msgs(5); // 共 10 条
-        when(chatMemory.get("manus:abc")).thenReturn(stored);
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(stored);
         stubSummary("这是前情摘要");
 
-        List<Message> loaded = memory.load("abc");
+        List<Message> loaded = memory.load("abc", "tenant1");
         assertEquals(3, loaded.size()); // 摘要 + 2 条保留
         assertTrue(loaded.get(0) instanceof SystemMessage);
         assertTrue(loaded.get(0).getText().contains("这是前情摘要"));
@@ -97,12 +97,42 @@ class ConversationMemoryTest {
     }
 
     @Test
+    void loadReusesCacheWhenOverflowUnchanged() {
+        props.setWindowSize(2);
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
+        stubSummary("摘要A");
+
+        memory.load("abc", "tenant1");
+        memory.load("abc", "tenant1");
+
+        // overflow 未变化：第二次直接复用缓存，不再调摘要模型
+        verify(chatModel, times(1)).call(any(Prompt.class));
+    }
+
+    @Test
+    void loadRollsSummaryWhenOverflowGrows() {
+        props.setWindowSize(2);
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
+        stubSummary("摘要A");
+        memory.load("abc", "tenant1"); // 首次：摘要 8 条 overflow
+
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(6)); // 增长到 12 条，overflow 变 10
+        stubSummary("摘要A+新增");
+        List<Message> loaded = memory.load("abc", "tenant1");
+
+        // 只补算新增 2 条，共调 2 次摘要模型；结果包含最新摘要
+        verify(chatModel, times(2)).call(any(Prompt.class));
+        assertTrue(loaded.get(0) instanceof SystemMessage);
+        assertTrue(loaded.get(0).getText().contains("摘要A"));
+    }
+
+    @Test
     void loadDropsOverflowWhenSummarizeFails() {
         props.setWindowSize(2);
-        when(chatMemory.get("manus:abc")).thenReturn(msgs(5));
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
         when(chatModel.call(any(Prompt.class))).thenThrow(new RuntimeException("模型不可用"));
 
-        List<Message> loaded = memory.load("abc");
+        List<Message> loaded = memory.load("abc", "tenant1");
         // 摘要失败 → 安全降级为丢弃超窗部分，只保留窗口内
         assertEquals(2, loaded.size());
         assertTrue(loaded.stream().noneMatch(m -> m instanceof SystemMessage));
@@ -112,19 +142,19 @@ class ConversationMemoryTest {
     void loadSkipsSummarizeWhenDisabled() {
         props.setWindowSize(2);
         props.setSummarizeOverflow(false);
-        when(chatMemory.get("manus:abc")).thenReturn(msgs(5));
-        assertEquals(2, memory.load("abc").size());
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
+        assertEquals(2, memory.load("abc", "tenant1").size());
         verify(chatModel, never()).call(any(Prompt.class));
     }
 
     @Test
     void loadReusesSummaryFromCache() {
         props.setWindowSize(2);
-        when(chatMemory.get("manus:abc")).thenReturn(msgs(5));
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
         stubSummary("缓存摘要");
 
-        memory.load("abc");  // 第一次：调用摘要模型并缓存
-        memory.load("abc");  // 第二次：命中缓存，不再调用
+        memory.load("abc", "tenant1");  // 第一次：调用摘要模型并缓存
+        memory.load("abc", "tenant1");  // 第二次：命中缓存，不再调用
 
         verify(chatModel, times(1)).call(any(Prompt.class));
     }
@@ -132,12 +162,12 @@ class ConversationMemoryTest {
     @Test
     void clearInvalidatesSummaryCache() {
         props.setWindowSize(2);
-        when(chatMemory.get("manus:abc")).thenReturn(msgs(5));
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
         stubSummary("摘要A");
 
-        memory.load("abc");
-        memory.clear("abc");  // 清会话同时清缓存
-        memory.load("abc");   // 重新生成摘要
+        memory.load("abc", "tenant1");
+        memory.clear("abc", "tenant1");  // 清会话同时清缓存
+        memory.load("abc", "tenant1");   // 重新生成摘要
 
         verify(chatModel, times(2)).call(any(Prompt.class));
     }
@@ -149,9 +179,9 @@ class ConversationMemoryTest {
                 new UserMessage("问题"),
                 new SystemMessage("系统提示不应落库"),
                 new AssistantMessage("回答"));
-        memory.save("abc", messages);
+        memory.save("abc", "tenant1", messages);
         ArgumentCaptor<List<Message>> captor = ArgumentCaptor.forClass(List.class);
-        verify(chatMemory).add(eq("manus:abc"), captor.capture());
+        verify(chatMemory).add(eq("tenant1:manus:abc"), captor.capture());
         List<Message> saved = captor.getValue();
         assertEquals(2, saved.size());
         assertTrue(saved.stream().noneMatch(m -> m instanceof SystemMessage));
@@ -161,15 +191,15 @@ class ConversationMemoryTest {
 
     @Test
     void saveSkipsWhenNothingToStore() {
-        memory.save("abc", List.of());
+        memory.save("abc", "tenant1", List.of());
         verify(chatMemory, never()).add(anyString(), anyList());
-        memory.save("abc", null);
+        memory.save("abc", "tenant1", null);
         verify(chatMemory, never()).add(anyString(), anyList());
     }
 
     @Test
     void clearUsesNamespace() {
-        memory.clear("abc");
-        verify(chatMemory).clear("manus:abc");
+        memory.clear("abc", "tenant1");
+        verify(chatMemory).clear("tenant1:manus:abc");
     }
 }

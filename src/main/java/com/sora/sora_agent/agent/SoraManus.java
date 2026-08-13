@@ -30,8 +30,15 @@ public class SoraManus extends ToolCallAgent {
     /** 会话记忆（可选；注入后支持跨请求持久化，否则维持无状态） */
     private ConversationMemory conversationMemory;
 
+    /** 租户命名空间（由 API Key 派生），隔离不同调用方的会话记忆 */
+    private String tenant;
+
     public void setConversationMemory(ConversationMemory conversationMemory) {
         this.conversationMemory = conversationMemory;
+    }
+
+    public void setTenant(String tenant) {
+        this.tenant = tenant;
     }
 
     /** 技能体系（可选；注入后 systemPrompt 追加可用技能清单） */
@@ -150,7 +157,7 @@ public class SoraManus extends ToolCallAgent {
                 injectAgentGuide();
                 // 载入会话历史（若开启记忆）
                 if (withMemory) {
-                    List<Message> history = conversationMemory.load(conversationId);
+                    List<Message> history = conversationMemory.load(conversationId, tenant);
                     if (!history.isEmpty()) {
                         this.getMessageList().addAll(history);
                         historySize = history.size();
@@ -213,7 +220,11 @@ public class SoraManus extends ToolCallAgent {
                         List<Message> all = this.getMessageList();
                         if (all.size() > historySize) {
                             List<Message> newMessages = all.subList(historySize, all.size());
-                            conversationMemory.save(conversationId, filterInternalPrompts(newMessages));
+                            try {
+                                conversationMemory.save(conversationId, tenant, filterInternalPrompts(newMessages));
+                            } catch (Exception e) {
+                                log.error("会话记忆持久化失败, chatId={}: {}", conversationId, e.getMessage());
+                            }
                         }
                     }
                 }

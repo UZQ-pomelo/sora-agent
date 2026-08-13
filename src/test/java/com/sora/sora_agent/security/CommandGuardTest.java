@@ -45,6 +45,16 @@ class CommandGuardTest {
     }
 
     @Test
+    void cmdMetacharBypassRejected() {
+        // cmd 元字符可拼接额外命令，白名单模式下必须拒绝
+        CommandGuard guard = new CommandGuard(List.of("git"));
+        assertFalse(guard.isAllowed("git & powershell -c whoami"));
+        assertFalse(guard.isAllowed("dir | findstr x"));
+        assertFalse(guard.isAllowed("echo a > out.txt"));
+        assertFalse(guard.isAllowed("echo a < in.txt"));
+    }
+
+    @Test
     void blankCommandRejectedWhenConfigured() {
         CommandGuard guard = new CommandGuard(List.of("git"));
         assertFalse(guard.isAllowed(null));

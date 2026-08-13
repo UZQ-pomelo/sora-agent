@@ -39,12 +39,12 @@ class ConversationServiceTest {
     @Test
     void listConversationsStripsNamespaceAndTruncatesTitle() {
         ConversationSummary s = new ConversationSummary();
-        s.setConversationId("manus:abc");
+        s.setConversationId("tenant1:manus:abc");
         s.setTitle("这是一段非常长的用户消息标题肯定超过十个字");
         s.setMessageCount(5L);
-        when(mapper.listConversations("manus:")).thenReturn(List.of(s));
+        when(mapper.listConversations("tenant1:manus:")).thenReturn(List.of(s));
 
-        List<ConversationSummary> list = service.listConversations();
+        List<ConversationSummary> list = service.listConversations("tenant1");
         assertEquals(1, list.size());
         assertEquals("abc", list.get(0).getConversationId());
         assertTrue(list.get(0).getTitle().endsWith("…"));
@@ -54,16 +54,16 @@ class ConversationServiceTest {
     @Test
     void listConversationsKeepsShortTitle() {
         ConversationSummary s = new ConversationSummary();
-        s.setConversationId("manus:abc");
+        s.setConversationId("tenant1:manus:abc");
         s.setTitle("你好");
-        when(mapper.listConversations("manus:")).thenReturn(List.of(s));
-        assertEquals("你好", service.listConversations().get(0).getTitle());
+        when(mapper.listConversations("tenant1:manus:")).thenReturn(List.of(s));
+        assertEquals("你好", service.listConversations("tenant1").get(0).getTitle());
     }
 
     @Test
     void getHistoryDelegatesWithNamespace() {
-        when(chatMemory.get("manus:abc")).thenReturn(List.of(new UserMessage("hi")));
-        assertEquals(1, service.getHistory("abc").size());
-        verify(chatMemory).get("manus:abc");
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(List.of(new UserMessage("hi")));
+        assertEquals(1, service.getHistory("abc", "tenant1").size());
+        verify(chatMemory).get("tenant1:manus:abc");
     }
 }

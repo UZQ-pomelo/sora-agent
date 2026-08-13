@@ -30,10 +30,12 @@ public class ConversationService {
     }
 
     /**
-     * 会话列表（命名空间过滤、按最后消息 id 倒序）。
+     * 会话列表（按租户隔离、按最后消息 id 倒序）。
+     *
+     * @param tenant 租户命名空间（由 API Key 派生）
      */
-    public List<ConversationSummary> listConversations() {
-        String prefix = props.getNamespace() + ":";
+    public List<ConversationSummary> listConversations(String tenant) {
+        String prefix = tenantPrefix(tenant);
         List<ConversationSummary> list = mapper.listConversations(prefix);
         list.forEach(s -> {
             if (s.getConversationId() != null && s.getConversationId().startsWith(prefix)) {
@@ -47,9 +49,14 @@ public class ConversationService {
     }
 
     /**
-     * 拉取某会话的全部历史消息（原始 Spring AI Message 列表）。
+     * 拉取某会话的全部历史消息（按租户隔离）。
      */
-    public List<Message> getHistory(String conversationId) {
-        return chatMemory.get(props.getNamespace() + ":" + conversationId);
+    public List<Message> getHistory(String conversationId, String tenant) {
+        return chatMemory.get(tenantPrefix(tenant) + conversationId);
+    }
+
+    private String tenantPrefix(String tenant) {
+        String t = (tenant == null || tenant.isBlank()) ? "default" : tenant;
+        return t + ":" + props.getNamespace() + ":";
     }
 }

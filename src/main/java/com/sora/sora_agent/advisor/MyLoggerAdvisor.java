@@ -27,13 +27,23 @@ public class MyLoggerAdvisor implements CallAdvisor, StreamAdvisor {
         return 0;
     }
 
+    /** 日志脱敏：避免完整 prompt/回复（含工具结果、敏感内容）明文落日志。 */
+    private static final int LOG_MAX_CHARS = 2000;
+
     private ChatClientRequest before(ChatClientRequest request){
-        log.info("AI Request: {}", request.prompt());
+        log.info("AI Request: {}", truncate(request.prompt().getContents()));
         return request;
     }
 
     private void observeAfter(ChatClientResponse chatClientResponse){
-        log.info("AI Response: {}", chatClientResponse.chatResponse().getResult().getOutput().getText());
+        log.info("AI Response: {}", truncate(chatClientResponse.chatResponse().getResult().getOutput().getText()));
+    }
+
+    private String truncate(String s) {
+        if (s == null) {
+            return "null";
+        }
+        return s.length() <= LOG_MAX_CHARS ? s : s.substring(0, LOG_MAX_CHARS) + "…(截断)";
     }
 
     @Override

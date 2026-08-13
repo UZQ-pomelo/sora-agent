@@ -131,6 +131,8 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
     } catch (err: unknown) {
       if (aborted) return
       if (err instanceof DOMException && err.name === 'AbortError') return
+      // 关闭底层连接（空闲超时/异常路径），避免 fetch 流悬挂泄漏
+      controller.abort()
       onError?.(`⚠️ 连接失败: ${err instanceof Error ? err.message : '未知错误'}`)
       onComplete?.()
     }

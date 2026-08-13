@@ -18,7 +18,10 @@ import com.sora.sora_agent.workflow.WorkflowEngine;
 import com.sora.sora_agent.workflow.WorkflowLoader;
 import com.sora.sora_agent.service.ModelFallbackService.ModelAttempt;
 import com.sora.sora_agent.service.ModelFallbackService.StreamModelResult;
+import com.sora.sora_agent.security.ApiKeyAuthFilter;
+import com.sora.sora_agent.security.SecurityProperties;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -45,6 +48,9 @@ import java.util.concurrent.ExecutorService;
 @RestController
 @RequestMapping("/ai")
 public class AiController {
+
+    /** 空 MCP 工具提供者（enableMcpTools=false 时用，避免 MCP 工具绕过本地开关） */
+    private static final ToolCallbackProvider EMPTY_TOOL_PROVIDER = () -> new ToolCallback[0];
 
     @Resource
     private TourApp tourApp;
@@ -214,6 +220,9 @@ public class AiController {
     @Resource
     private ToolCallbackProvider toolCallbacks;
 
+    @Resource
+    private SecurityProperties securityProperties;
+
     /**
      * 流式调用 Manus 超级智能体（Agent 场景，无 fallback，模型在任务期内锁死）。
      *
@@ -225,12 +234,18 @@ public class AiController {
     public SseEmitter doChatWithManus(
             @RequestParam String message,
             @RequestParam(required = false) String chatId,
-            @RequestParam(required = false) String model) {
+            @RequestParam(required = false) String model,
+            HttpServletRequest request) {
         String targetModel = (model != null && !model.isBlank())
                 ? model
                 : modelConfig.getDefaultModel();
-        SoraManus soraManus = new SoraManus(allTools, toolCallbacks, dashscopeChatModel, targetModel);
+        // MCP 工具默认不合并（不经 app.security.tools.* 开关过滤），enableMcpTools=true 才启用
+        ToolCallbackProvider effectiveMcp = securityProperties.isEnableMcpTools()
+                ? toolCallbacks
+                : EMPTY_TOOL_PROVIDER;
+        SoraManus soraManus = new SoraManus(allTools, effectiveMcp, dashscopeChatModel, targetModel);
         soraManus.setConversationMemory(conversationMemory);
+        soraManus.setTenant(tenantOf(request));
         soraManus.setSkillLoader(skillLoader);
         soraManus.setWorkflowLoader(workflowLoader);
         soraManus.setAgentLoader(workerAgentLoader);
@@ -240,20 +255,20 @@ public class AiController {
     }
 
     /**
-     * 会话列表（供前端「对话记录」面板）。
+     * 会话列表（供前端「对话记录」面板；按 API Key 租户隔离）。
      */
     @GetMapping("/manus/conversations")
-    public BaseResponse<List<ConversationSummary>> listManusConversations() {
-        return BaseResponse.success(conversationService.listConversations());
+    public BaseResponse<List<ConversationSummary>> listManusConversations(HttpServletRequest request) {
+        return BaseResponse.success(conversationService.listConversations(tenantOf(request)));
     }
 
     /**
-     * 拉取某会话的历史消息（供切换会话后渲染）。
+     * 拉取某会话的历史消息（供切换会话后渲染；按 API Key 租户隔离）。
      */
     @GetMapping("/manus/conversations/{conversationId}/messages")
     public BaseResponse<List<Map<String, String>>> getManusConversationMessages(
-            @PathVariable String conversationId) {
-        List<Message> messages = conversationService.getHistory(conversationId);
+            @PathVariable String conversationId, HttpServletRequest request) {
+        List<Message> messages = conversationService.getHistory(conversationId, tenantOf(request));
         List<Map<String, String>> dto = messages.stream()
                 .filter(m -> m instanceof UserMessage || m instanceof AssistantMessage)
                 .map(m -> {
@@ -281,6 +296,14 @@ public class AiController {
     }
 
     // ---- 私有工具方法 ----
+
+    /**
+     * 由 API Key 派生租户命名空间（hash），隔离不同调用方的会话。
+     */
+    private String tenantOf(HttpServletRequest request) {
+        String key = request.getHeader(ApiKeyAuthFilter.API_KEY_HEADER);
+        return (key == null || key.isBlank()) ? "anon" : Integer.toHexString(key.hashCode());
+    }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> parseWorkflowInput(String input) {
