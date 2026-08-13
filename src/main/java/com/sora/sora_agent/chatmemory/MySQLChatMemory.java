@@ -96,6 +96,24 @@ public class MySQLChatMemory implements ChatMemory {
     }
 
     /**
+     * 原子替换某会话的全部消息（供写侧裁剪用：先删后批量插入，重排 message_index）。
+     * 与 add/clear 同一把会话锁，保证同会话不并发交错。
+     */
+    public void replace(String conversationId, List<Message> messages) {
+        final List<Message> msgs = (messages == null) ? List.of() : messages;
+        synchronized (lockFor(conversationId)) {
+            transactionTemplate.executeWithoutResult(status -> {
+                mapper.delete(
+                        new LambdaQueryWrapper<ChatMemoryMessage>()
+                                .eq(ChatMemoryMessage::getConversationId, conversationId));
+                for (int i = 0; i < msgs.size(); i++) {
+                    mapper.insert(toEntity(conversationId, msgs.get(i), i));
+                }
+            });
+        }
+    }
+
+    /**
      * 计算下一条消息的序号（自增）。
      */
     private Long getNextIndex(String conversationId) {

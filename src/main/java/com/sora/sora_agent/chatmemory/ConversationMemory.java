@@ -2,7 +2,6 @@ package com.sora.sora_agent.chatmemory;
 
 import com.sora.sora_agent.config.ConversationMemoryProperties;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -10,39 +9,35 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * 会话记忆服务：无状态 agent + 外部记忆。
+ * 会话记忆服务：无状态 agent + 外部记忆（写侧裁剪 + 摘要落库）。
  *
  * <ul>
- *   <li>{@link #load}：按命名空间载入会话历史；超窗时把更早部分用 LLM 压成摘要，
- *       以 SystemMessage 注入窗口首部（摘要失败安全降级为丢弃超窗部分）。</li>
- *   <li>{@link #save}：只持久化 user/assistant 文本消息（工具调用不落库）。</li>
+ *   <li>{@link #save}：只持久化 user/assistant 文本消息；末尾触发写侧裁剪，把超窗
+ *       部分压缩成摘要落库（SystemMessage，带 {@link #SUMMARY_PREFIX} 前缀），并删除
+ *       overflow 原始行，防止 DB 无限增长。</li>
+ *   <li>{@link #load}：直接读回（DB 已裁剪为「标题首条 + 摘要 + 窗口消息」）；
+ *       对未裁剪的旧数据，仍走内存摘要兜底（向后兼容）。</li>
  * </ul>
  */
 @Slf4j
 @Component
 public class ConversationMemory {
 
-    private final ChatMemory chatMemory;
+    /** 已落库摘要消息的文本前缀标记，用于 load/compact 识别，避免被再次摘要。 */
+    public static final String SUMMARY_PREFIX = "【会话摘要】";
+
+    private final MySQLChatMemory chatMemory;
     private final ChatModel chatModel;
     private final ConversationMemoryProperties props;
 
-    /**
-     * 摘要缓存（键 = 命名空间会话 id）：进程内复用 + 滚动补算。
-     * 记录已摘要的消息条数，overflow 变化时只补算增量，避免每轮全量重算。
-     */
-    private final ConcurrentHashMap<String, SummaryEntry> summaryCache = new ConcurrentHashMap<>();
-    private static final int SUMMARY_CACHE_MAX = 500;
-
-    public ConversationMemory(@Qualifier("mySQLChatMemory") ChatMemory chatMemory,
+    public ConversationMemory(MySQLChatMemory chatMemory,
                               ChatModel chatModel,
                               ConversationMemoryProperties props) {
         this.chatMemory = chatMemory;
@@ -51,7 +46,7 @@ public class ConversationMemory {
     }
 
     /**
-     * 载入会话历史（窗口化 + 摘要压缩）。
+     * 载入会话历史。
      *
      * @param tenant 租户命名空间（由 API Key 派生），隔离不同调用方的会话
      */
@@ -60,27 +55,32 @@ public class ConversationMemory {
         if (all == null || all.isEmpty()) {
             return List.of();
         }
+        // 已写侧裁剪（含摘要 system 消息）→ 直接返回「标题 + 摘要 + 窗口」
+        if (all.stream().anyMatch(this::isSummaryMessage)) {
+            return all;
+        }
+        // 未裁剪的旧数据：走内存摘要兜底（向后兼容）
         int window = Math.max(props.getWindowSize(), 1);
         if (all.size() <= window) {
             return all;
         }
+        if (!props.isSummarizeOverflow()) {
+            return all.subList(all.size() - window, all.size());
+        }
         List<Message> overflow = all.subList(0, all.size() - window);
         List<Message> keep = all.subList(all.size() - window, all.size());
-        if (!props.isSummarizeOverflow()) {
-            return keep;
-        }
-        SummaryEntry entry = summarizeRolling(namespaced(tenant, conversationId), overflow);
-        if (entry == null || entry.summary() == null || entry.summary().isBlank()) {
+        String summary = summarize(null, overflow);
+        if (summary == null || summary.isBlank()) {
             return keep;
         }
         List<Message> result = new ArrayList<>(keep.size() + 1);
-        result.add(new SystemMessage("以下为本会话更早对话的摘要（用于保持连续性）：\n" + entry.summary()));
+        result.add(summaryMessage(summary));
         result.addAll(keep);
         return result;
     }
 
     /**
-     * 持久化本轮新增消息（仅 user/assistant 文本）。
+     * 持久化本轮新增消息（仅 user/assistant 文本），末尾触发写侧裁剪。
      *
      * @param tenant 租户命名空间（由 API Key 派生）
      */
@@ -95,39 +95,70 @@ public class ConversationMemory {
         if (textOnly.isEmpty()) {
             return;
         }
-        chatMemory.add(namespaced(tenant, conversationId), textOnly);
+        String key = namespaced(tenant, conversationId);
+        chatMemory.add(key, textOnly);
+        compact(key);
     }
 
     /**
      * 清空某会话全部历史。
      */
     public void clear(String conversationId, String tenant) {
-        summaryCache.remove(namespaced(tenant, conversationId));
         chatMemory.clear(namespaced(tenant, conversationId));
     }
 
     /**
-     * 滚动摘要：overflow 未变化则复用缓存；变化则只对新增部分补算并与旧摘要合并。
+     * 写侧裁剪：对话消息数超过 2 倍窗口时，把超窗部分压缩进摘要落库并删除原始行。
+     * 保留首条 user 消息作会话列表标题锚点。
      */
-    private SummaryEntry summarizeRolling(String cacheKey, List<Message> overflow) {
-        int overflowCount = overflow.size();
-        SummaryEntry existing = summaryCache.get(cacheKey);
-        if (existing != null && existing.summarizedCount() == overflowCount) {
-            return existing; // 未变化，复用
+    private void compact(String key) {
+        if (!props.isSummarizeOverflow()) {
+            return;
         }
-        int start = (existing == null) ? 0 : existing.summarizedCount();
-        List<Message> delta = overflow.subList(start, overflowCount);
-        String prior = (existing == null) ? null : existing.summary();
-        String summary = summarize(prior, delta);
-        if (summary == null || summary.isBlank()) {
-            // 补算失败：保留旧摘要（若有），避免上下文彻底丢失
-            return existing;
+        List<Message> all = chatMemory.get(key);
+        if (all == null || all.isEmpty()) {
+            return;
         }
-        SummaryEntry updated = new SummaryEntry(summary, overflowCount);
-        if (summaryCache.size() < SUMMARY_CACHE_MAX) {
-            summaryCache.put(cacheKey, updated);
+        // 分离：已落库摘要 vs 真实对话
+        List<Message> summaries = all.stream().filter(this::isSummaryMessage).toList();
+        List<Message> dialogs = all.stream().filter(m -> !isSummaryMessage(m)).toList();
+        int window = Math.max(props.getWindowSize(), 1);
+        if (dialogs.size() <= window * 2) {
+            return; // 缓冲：未超太多不裁剪，避免每轮都做 LLM 摘要
         }
-        return updated;
+        Message firstUser = dialogs.stream()
+                .filter(m -> m instanceof UserMessage)
+                .findFirst().orElse(null);
+        List<Message> keep = dialogs.subList(dialogs.size() - window, dialogs.size());
+        List<Message> overflow = new ArrayList<>(dialogs.subList(0, dialogs.size() - window));
+        if (firstUser != null) {
+            overflow.remove(firstUser); // 保留首条 user 作标题
+        }
+        String prior = summaries.isEmpty()
+                ? null
+                : summaries.get(0).getText().substring(SUMMARY_PREFIX.length());
+        String newSummary = summarize(prior, overflow);
+        // 重组：首条 user + 摘要 + 最近 window 条
+        List<Message> rebuilt = new ArrayList<>();
+        if (firstUser != null) {
+            rebuilt.add(firstUser);
+        }
+        if (newSummary != null && !newSummary.isBlank()) {
+            rebuilt.add(summaryMessage(newSummary));
+        }
+        rebuilt.addAll(keep);
+        chatMemory.replace(key, rebuilt);
+        log.info("会话压缩完成: {}（对话 {} 条 → 保留 {} 条 + 摘要）", key, dialogs.size(), keep.size());
+    }
+
+    private boolean isSummaryMessage(Message m) {
+        return m instanceof SystemMessage
+                && m.getText() != null
+                && m.getText().startsWith(SUMMARY_PREFIX);
+    }
+
+    private SystemMessage summaryMessage(String summary) {
+        return new SystemMessage(SUMMARY_PREFIX + summary);
     }
 
     private String namespaced(String tenant, String conversationId) {
@@ -167,9 +198,5 @@ public class ConversationMemory {
             log.warn("会话摘要生成失败，回退为旧摘要: {}", e.getMessage());
             return priorSummary;
         }
-    }
-
-    /** 摘要缓存项：摘要文本 + 已覆盖的消息条数。 */
-    private record SummaryEntry(String summary, int summarizedCount) {
     }
 }
