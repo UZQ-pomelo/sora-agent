@@ -1,5 +1,6 @@
 package com.sora.sora_agent.config;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,17 +23,20 @@ public class LlmConcurrencyBeanPostProcessor implements BeanPostProcessor, Order
 
     private final Semaphore semaphore;
     private final int maxConcurrency;
+    private final MeterRegistry meterRegistry;
 
-    public LlmConcurrencyBeanPostProcessor(@Value("${app.executor.llm-max-concurrency:16}") int maxConcurrency) {
+    public LlmConcurrencyBeanPostProcessor(@Value("${app.executor.llm-max-concurrency:16}") int maxConcurrency,
+                                           MeterRegistry meterRegistry) {
         this.maxConcurrency = Math.max(maxConcurrency, 1);
         this.semaphore = new Semaphore(this.maxConcurrency);
+        this.meterRegistry = meterRegistry;
     }
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) {
         if (bean instanceof ChatModel lm && !(lm instanceof LlmLimitedChatModel)) {
             log.info("为 ChatModel[{}] 注入 LLM 并发限制（最多 {} 并发）", beanName, maxConcurrency);
-            return new LlmLimitedChatModel(lm, semaphore);
+            return new LlmLimitedChatModel(lm, semaphore, meterRegistry);
         }
         return bean;
     }

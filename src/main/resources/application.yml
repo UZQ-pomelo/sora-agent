@@ -17,6 +17,16 @@ server:
   servlet:
     context-path: /api
 
+# 可观测性：暴露 health 与 metrics（/api 前缀下为 /api/actuator/health 等）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: never
+
 # springdoc-openapi
 springdoc:
   swagger-ui:

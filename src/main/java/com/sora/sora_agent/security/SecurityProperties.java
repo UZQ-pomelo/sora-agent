@@ -47,7 +47,8 @@ public class SecurityProperties {
      */
     private List<String> protectPatterns = new ArrayList<>(List.of(
             "/ai/**", "/chat/**",
-            "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/doc.html"));
+            "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/doc.html",
+            "/actuator/**"));
 
     /** CORS 跨域来源配置。 */
     private Cors cors = new Cors();
