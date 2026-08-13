@@ -26,12 +26,12 @@ spring:
         max-document-batch-size: 10
         schema-name: public
 
-  # MySQL — 主数据源（MyBatis-Plus）
+  # PostgreSQL — 唯一数据源（对话记忆 + pgvector 共用）
   datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/sora_agent
-    username: <你的 MySQL 用户名>
-    password: <你的 MySQL 密码>
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://localhost:5432/sora_agent
+    username: <你的 PostgreSQL 用户名>
+    password: <你的 PostgreSQL 密码>
 
 # Exa 联网搜索（可选；不填则搜索工具不注册，应用照常启动）
 exa:
@@ -118,9 +118,3 @@ app:
       - name: deepseek-v3
         display: "Deepseek V3"
     default-model: deepseek-v3.2
-  datasource:
-    postgresql:
-      driver-class-name: org.postgresql.Driver
-      jdbc-url: jdbc:postgresql://localhost:5432/sora_agent
-      username: <你的 PostgreSQL 用户名>
-      password: <你的 PostgreSQL 密码>

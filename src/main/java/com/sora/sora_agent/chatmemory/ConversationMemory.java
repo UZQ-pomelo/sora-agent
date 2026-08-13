@@ -33,11 +33,11 @@ public class ConversationMemory {
     /** 已落库摘要消息的文本前缀标记，用于 load/compact 识别，避免被再次摘要。 */
     public static final String SUMMARY_PREFIX = "【会话摘要】";
 
-    private final MySQLChatMemory chatMemory;
+    private final PgChatMemory chatMemory;
     private final ChatModel chatModel;
     private final ConversationMemoryProperties props;
 
-    public ConversationMemory(MySQLChatMemory chatMemory,
+    public ConversationMemory(PgChatMemory chatMemory,
                               ChatModel chatModel,
                               ConversationMemoryProperties props) {
         this.chatMemory = chatMemory;

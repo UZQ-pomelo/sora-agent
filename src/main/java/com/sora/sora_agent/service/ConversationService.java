@@ -1,6 +1,6 @@
 package com.sora.sora_agent.service;
 
-import com.sora.sora_agent.chatmemory.MySQLChatMemory;
+import com.sora.sora_agent.chatmemory.PgChatMemory;
 import com.sora.sora_agent.config.ConversationMemoryProperties;
 import com.sora.sora_agent.mapper.ChatMemoryMessageMapper;
 import com.sora.sora_agent.model.dto.ConversationSummary;
@@ -22,7 +22,7 @@ public class ConversationService {
     private final ConversationMemoryProperties props;
 
     public ConversationService(ChatMemoryMessageMapper mapper,
-                               @Qualifier("mySQLChatMemory") ChatMemory chatMemory,
+                               @Qualifier("pgChatMemory") ChatMemory chatMemory,
                                ConversationMemoryProperties props) {
         this.mapper = mapper;
         this.chatMemory = chatMemory;

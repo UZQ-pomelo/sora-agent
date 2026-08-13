@@ -16,14 +16,14 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.List;
 
 /**
- * 基于 MySQL（MyBatis-Plus）的 ChatMemory 持久化实现。
+ * 基于 PostgreSQL（MyBatis-Plus）的 ChatMemory 持久化实现。
  * <p>
  * Spring AI 1.1.x 中 ChatMemory 接口的 {@code get} 方法已移除 {@code lastN} 参数，
  * 窗口控制由上层的 {@code MessageWindowChatMemory} 统一管理。
  * </p>
  */
 @Component
-public class MySQLChatMemory implements ChatMemory {
+public class PgChatMemory implements ChatMemory {
 
     private final ChatMemoryMessageMapper mapper;
     private final TransactionTemplate transactionTemplate;
@@ -35,7 +35,7 @@ public class MySQLChatMemory implements ChatMemory {
     private static final int LOCK_STRIPES = 64;
     private final Object[] lockStripes = new Object[LOCK_STRIPES];
 
-    public MySQLChatMemory(ChatMemoryMessageMapper mapper, PlatformTransactionManager txManager) {
+    public PgChatMemory(ChatMemoryMessageMapper mapper, PlatformTransactionManager txManager) {
         this.mapper = mapper;
         this.transactionTemplate = new TransactionTemplate(txManager);
         for (int i = 0; i < LOCK_STRIPES; i++) {

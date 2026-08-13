@@ -33,14 +33,14 @@ import static org.mockito.Mockito.when;
  */
 class ConversationMemoryTest {
 
-    private MySQLChatMemory chatMemory;
+    private PgChatMemory chatMemory;
     private ChatModel chatModel;
     private ConversationMemoryProperties props;
     private ConversationMemory memory;
 
     @BeforeEach
     void setUp() {
-        chatMemory = mock(MySQLChatMemory.class);
+        chatMemory = mock(PgChatMemory.class);
         chatModel = mock(ChatModel.class);
         props = new ConversationMemoryProperties();
         props.setNamespace("manus");

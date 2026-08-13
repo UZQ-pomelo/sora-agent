@@ -48,7 +48,7 @@ public class TourApp {
             + "你拥有全球目的地知识, 精通行程设计、交通接驳、住宿甄选、美食发掘和预算管理。";
 
     public TourApp(ModelFallbackService modelFallbackService,
-                   @Qualifier("mySQLChatMemory") ChatMemory chatMemory,
+                   @Qualifier("pgChatMemory") ChatMemory chatMemory,
                    ToolConfig toolConfig,
                    ModelConfig modelConfig) {
         this.modelFallbackService = modelFallbackService;
