@@ -14,7 +14,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 基于 MySQL（MyBatis-Plus）的 ChatMemory 持久化实现。
@@ -29,12 +28,19 @@ public class MySQLChatMemory implements ChatMemory {
     private final ChatMemoryMessageMapper mapper;
     private final TransactionTemplate transactionTemplate;
 
-    /** 每会话锁：保证同会话 message_index 分配原子（单实例下足够；跨实例需唯一索引+重试） */
-    private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
+    /**
+     * 分片锁：按 conversationId 哈希到固定数量的锁（而非每会话一个锁对象），
+     * 避免锁 Map 随会话数无限增长。同分片的会话串行化，单实例下足够。
+     */
+    private static final int LOCK_STRIPES = 64;
+    private final Object[] lockStripes = new Object[LOCK_STRIPES];
 
     public MySQLChatMemory(ChatMemoryMessageMapper mapper, PlatformTransactionManager txManager) {
         this.mapper = mapper;
         this.transactionTemplate = new TransactionTemplate(txManager);
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            lockStripes[i] = new Object();
+        }
     }
 
     @Override
@@ -74,7 +80,8 @@ public class MySQLChatMemory implements ChatMemory {
     }
 
     private Object lockFor(String conversationId) {
-        return locks.computeIfAbsent(conversationId, k -> new Object());
+        int h = (conversationId == null) ? 0 : conversationId.hashCode();
+        return lockStripes[Math.abs(h % LOCK_STRIPES)];
     }
 
     private boolean isReadableType(String type) {
