@@ -15,11 +15,13 @@ spring:
         enabled: true
         options:
           model: wanx-v1
+    # 注意：向量存储由 TourAppVectorStoreConfig 手动构建（非 Spring 自动配置），
+    # 维度跟随 DashScope embedding 模型实际输出（PgVectorStore 默认调 embeddingModel.dimensions()）。
+    # 此处 spring.ai.vectorstore.pgvector.* 为自动配置属性，对手动 Bean 不生效，保留仅作参考。
     vectorstore:
       pgvector:
         initialize-schema: true
         index-type: HNSW
-        dimensions: 1536
         distance-type: COSINE_DISTANCE
         max-document-batch-size: 10
         schema-name: public
