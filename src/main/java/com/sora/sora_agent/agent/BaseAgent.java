@@ -30,8 +30,25 @@ public abstract class BaseAgent {
     private String systemPrompt;
     private String nextStepPrompt;
 
-    // 状态
-    private AgentState state = AgentState.IDLE;
+    // 状态（volatile：容器线程 onTimeout/onCompletion 改，agent 循环线程读，需保证可见性）
+    private volatile AgentState state = AgentState.IDLE;
+
+    // 客户端连接是否已关闭（断连/超时后置位，agent 循环据此提前终止，避免空转烧 token）
+    private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * 标记连接已关闭（断连/超时调用），循环每轮检查以提前退出。
+     */
+    protected void markClosed() {
+        this.closed.set(true);
+    }
+
+    /**
+     * 连接是否已关闭。
+     */
+    protected boolean isClosed() {
+        return this.closed.get();
+    }
 
     // 执行控制
     private int maxSteps = 10;

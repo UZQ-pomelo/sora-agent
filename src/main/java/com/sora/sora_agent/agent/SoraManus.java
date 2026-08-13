@@ -169,7 +169,9 @@ public class SoraManus extends ToolCallAgent {
 
                 try {
                     for (int i = 0; i < this.getMaxSteps()
-                            && this.getState() == com.sora.sora_agent.agent.model.AgentState.RUNNING; i++) {
+                            && this.getState() == com.sora.sora_agent.agent.model.AgentState.RUNNING
+                            && !this.isClosed()
+                            && !Thread.currentThread().isInterrupted(); i++) {
                         int stepNumber = i + 1;
                         this.setCurrentStep(stepNumber);
                         log.info("Executing step " + stepNumber + "/" + this.getMaxSteps());
@@ -235,6 +237,7 @@ public class SoraManus extends ToolCallAgent {
         }, executorService != null ? executorService : java.util.concurrent.ForkJoinPool.commonPool());
 
         emitter.onTimeout(() -> {
+            this.markClosed(); // 标记关闭，agent 循环每轮检查提前退出
             this.setState(com.sora.sora_agent.agent.model.AgentState.ERROR);
             task.cancel(true); // 中断未完成的 agent 循环，避免继续调用 LLM 烧 token
             this.cleanup();
@@ -242,6 +245,7 @@ public class SoraManus extends ToolCallAgent {
         });
 
         emitter.onCompletion(() -> {
+            this.markClosed();
             if (this.getState() == com.sora.sora_agent.agent.model.AgentState.RUNNING) {
                 this.setState(com.sora.sora_agent.agent.model.AgentState.FINISHED);
             }
