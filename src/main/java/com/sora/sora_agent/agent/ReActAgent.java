@@ -1,7 +1,9 @@
 package com.sora.sora_agent.agent;
 
+import com.sora.sora_agent.exception.AIServiceException;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 
@@ -13,6 +15,7 @@ import java.util.List;
  */
 @EqualsAndHashCode(callSuper = true)
 @Data
+@Slf4j
 public abstract class ReActAgent extends BaseAgent {
 
     /**
@@ -55,9 +58,12 @@ public abstract class ReActAgent extends BaseAgent {
                 return "思考完成 - 无需行动";
             }
             return act();
+        } catch (AIServiceException e) {
+            // 致命 LLM 错误：穿透到 runStream 置 ERROR，不让 agent 假装继续
+            throw e;
         } catch (Exception e) {
-            // 记录异常日志
-            e.printStackTrace();
+            // 工具调用等可恢复错误：记录并继续下一步（agent 可换策略）
+            log.warn("步骤执行失败(可恢复): {}", e.getMessage());
             return "步骤执行失败: " + e.getMessage();
         }
     }

@@ -3,6 +3,8 @@ package com.sora.sora_agent.agent;
 import cn.hutool.core.collection.CollUtil;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import com.sora.sora_agent.agent.model.AgentState;
+import com.sora.sora_agent.exception.AIServiceException;
+import com.sora.sora_agent.exception.ErrorCode;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
@@ -121,10 +123,10 @@ public class ToolCallAgent extends ReActAgent {
                 return true;
             }
         } catch (Exception e) {
-            log.error(getName() + "的思考过程遇到了问题: " + e.getMessage());
-            getMessageList().add(
-                    new AssistantMessage("处理时遇到错误: " + e.getMessage()));
-            return false;
+            // LLM 调用失败属致命错误：抛给 runStream 置 ERROR，而非伪装成正常回答
+            // （否则模型名无效/配额不足会变成"处理时遇到错误"的成功回复，还会污染记忆）
+            log.error(getName() + "的思考过程遇到致命错误: " + e.getMessage());
+            throw new AIServiceException(ErrorCode.AI_ERROR, "LLM 调用失败: " + e.getMessage(), e);
         }
     }
 

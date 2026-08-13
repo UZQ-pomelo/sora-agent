@@ -215,8 +215,9 @@ public class SoraManus extends ToolCallAgent {
                 } finally {
                     this.cleanup();
                     // 持久化本轮新增消息（仅 user/assistant 文本，工具调用不落库；
-                    // 排除内部注入的 nextStepPrompt，避免污染会话记忆）
-                    if (withMemory) {
+                    // 排除内部注入的 nextStepPrompt，避免污染会话记忆）。
+                    // ERROR/STUCK 状态不落库——任务未成功完成，中间态消息不进记忆。
+                    if (withMemory && this.getState() != com.sora.sora_agent.agent.model.AgentState.ERROR) {
                         List<Message> all = this.getMessageList();
                         if (all.size() > historySize) {
                             List<Message> newMessages = all.subList(historySize, all.size());
