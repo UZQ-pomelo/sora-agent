@@ -1,6 +1,7 @@
 package com.sora.sora_agent.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sora.sora_agent.config.WorkflowProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -43,7 +44,7 @@ class WorkflowEngineTest {
         workflowLoader = mock(WorkflowLoader.class);
         toolProvider = mock(ObjectProvider.class);
         engine = new WorkflowEngine(workflowLoader, chatModel, toolProvider, new ObjectMapper(),
-                Executors.newSingleThreadExecutor());
+                Executors.newSingleThreadExecutor(), new WorkflowProperties());
     }
 
     private ChatResponse resp(String text) {

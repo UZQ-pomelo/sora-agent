@@ -42,9 +42,9 @@ public class WorkerExecutor {
         if (delegations == null || delegations.isEmpty()) {
             return List.of();
         }
-        int poolSize = Math.min(delegations.size(), Math.max(props.getMaxConcurrency(), 1));
         long timeoutSeconds = Math.max(props.getDelegationTimeoutSeconds(), 1L);
-        ExecutorService pool = Executors.newFixedThreadPool(poolSize);
+        // 虚拟线程：worker 也是 I/O 密集（LLM 阻塞），并发由 LlmLimitedChatModel 信号量统一约束
+        ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
         try {
             List<CompletableFuture<DelegationResult>> futures = delegations.stream()
                     .map(d -> CompletableFuture.supplyAsync(() -> runOne(d), pool))

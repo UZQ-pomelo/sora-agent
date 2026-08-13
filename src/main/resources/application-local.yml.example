@@ -85,6 +85,7 @@ app:
   # 工作流体系（声明式步骤编排）：把 workflow YAML 放进目录即可用（重启后生效）
   workflow:
     enabled: true
+    step-timeout-seconds: 120   # 单步超时，防止挂起工具无限阻塞
     # 额外工作流目录（文件系统路径，可选）；留空则只加载 classpath 内置工作流 src/main/resources/workflows/
     # dir: ./workflows
   # 多 Agent 专家体系（声明式）：把 agent YAML 放进目录即可用（重启后生效）
@@ -92,6 +93,9 @@ app:
     enabled: true
     max-concurrency: 4
     delegation-timeout-seconds: 120  # 单次委派总超时，防止 worker 挂起拖死 supervisor
+  # 执行器：agent/工作流跑在虚拟线程上（I/O 密集近乎无上限并发），真实 LLM 并发由信号量限制
+  executor:
+    llm-max-concurrency: 16   # 全局最大并发 LLM 调用数（防打爆 DashScope 额度）
     # 额外专家目录（文件系统路径，可选）；留空则只加载 classpath 内置专家 src/main/resources/agents/
     # dir: ./agents
   # 会话记忆（Manus 智能体跨请求记忆 + 「对话记录」）

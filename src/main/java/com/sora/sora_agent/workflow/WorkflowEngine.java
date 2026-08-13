@@ -2,6 +2,7 @@ package com.sora.sora_agent.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sora.sora_agent.common.BaseResponse;
+import com.sora.sora_agent.config.WorkflowProperties;
 import com.sora.sora_agent.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -19,6 +20,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -46,15 +50,19 @@ public class WorkflowEngine {
     private final ObjectProvider<ToolCallback[]> toolProvider;
     private final ObjectMapper objectMapper;
     private final ExecutorService agentExecutor;
+    private final WorkflowProperties workflowProperties;
+    /** 工具步超时用：虚拟线程跑挂起工具，超时后主流程继续，不占平台线程 */
+    private final ExecutorService stepExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public WorkflowEngine(WorkflowLoader workflowLoader, ChatModel chatModel,
                           ObjectProvider<ToolCallback[]> toolProvider, ObjectMapper objectMapper,
-                          ExecutorService agentExecutor) {
+                          ExecutorService agentExecutor, WorkflowProperties workflowProperties) {
         this.workflowLoader = workflowLoader;
         this.chatModel = chatModel;
         this.toolProvider = toolProvider;
         this.objectMapper = objectMapper;
         this.agentExecutor = agentExecutor;
+        this.workflowProperties = workflowProperties;
     }
 
     /**
@@ -148,10 +156,31 @@ public class WorkflowEngine {
             }
             Map<String, String> params = renderParams(step.getParams(), input, stepResults);
             String json = objectMapper.writeValueAsString(params);
-            String result = callback.call(json);
+            String result = callToolWithTimeout(callback, json);
             return result == null ? "" : result;
         }
         throw new IllegalArgumentException("未知步骤类型: " + step.getType());
+    }
+
+    /**
+     * 带超时地调用工具：防止工具（如终端挂起进程）无限阻塞占用执行线程。
+     * 超时后主流程抛错终止工作流；挂起的工具跑在虚拟线程上，不占平台线程。
+     */
+    private String callToolWithTimeout(ToolCallback callback, String json) {
+        long timeout = Math.max(workflowProperties.getStepTimeoutSeconds(), 1L);
+        try {
+            return CompletableFuture.supplyAsync(() -> callback.call(json), stepExecutor)
+                    .get(timeout, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new IllegalStateException("工具[" + callback.getToolDefinition().name()
+                    + "]执行超时(>" + timeout + "s)");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("工具执行被中断", e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            throw new IllegalStateException("工具执行失败: " + cause.getMessage(), cause);
+        }
     }
 
     private ToolCallback findTool(String toolName) {

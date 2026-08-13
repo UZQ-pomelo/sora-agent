@@ -149,8 +149,9 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
   }
 }
 
-/** 空闲超时：超过该时长无数据视为断连，防止 reader.read() 永久 pending 卡死 isStreaming */
-const IDLE_TIMEOUT_MS = 60000
+/** 空闲超时：超过该时长无数据视为断连，防止 reader.read() 永久 pending 卡死 isStreaming。
+ * 单步 LLM 调用可能超过 60s，故放宽到 180s，避免误掐断正常长步骤 */
+const IDLE_TIMEOUT_MS = 180000
 
 function readWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,

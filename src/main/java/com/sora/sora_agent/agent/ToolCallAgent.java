@@ -75,10 +75,16 @@ public class ToolCallAgent extends ReActAgent {
      *
      * @return 是否需要执行行动
      */
+    /** 内部注入的 nextStepPrompt 消息的元数据标记（持久化时据此过滤，不落库）。 */
+    public static final String NEXT_STEP_PROMPT_MARKER = "sora.internal.nextStepPrompt";
+
     @Override
     public boolean think() {
         if (getNextStepPrompt() != null && !getNextStepPrompt().isEmpty()) {
-            UserMessage userMessage = new UserMessage(getNextStepPrompt());
+            UserMessage userMessage = UserMessage.builder()
+                    .text(getNextStepPrompt())
+                    .metadata(java.util.Map.of(NEXT_STEP_PROMPT_MARKER, true))
+                    .build();
             getMessageList().add(userMessage);
         }
         List<Message> messageList = getMessageList();

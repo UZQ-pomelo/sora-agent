@@ -20,4 +20,7 @@ public class WorkflowProperties {
 
     /** 工作流体系总开关。 */
     private boolean enabled = true;
+
+    /** 单步超时（秒）：tool/llm 步骤超过则终止该工作流，防止挂起线程泄漏。 */
+    private long stepTimeoutSeconds = 120;
 }

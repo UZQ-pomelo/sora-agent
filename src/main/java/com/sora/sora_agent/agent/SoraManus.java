@@ -261,15 +261,13 @@ public class SoraManus extends ToolCallAgent {
 
     /**
      * 过滤掉内部注入的 nextStepPrompt 用户消息（agent 的思考提示，不是真实对话内容）。
+     * 用元数据标记过滤，而非文本比对——死循环调整会改写 nextStepPrompt，文本比对会漏掉早期注入。
      */
     private List<Message> filterInternalPrompts(List<Message> messages) {
-        String nextStep = getNextStepPrompt();
-        if (nextStep == null || nextStep.isBlank()) {
-            return messages;
-        }
         return messages.stream()
                 .filter(m -> !(m instanceof org.springframework.ai.chat.messages.UserMessage
-                        && nextStep.equals(m.getText())))
+                        && Boolean.TRUE.equals(((org.springframework.ai.chat.messages.UserMessage) m)
+                                .getMetadata().get(ToolCallAgent.NEXT_STEP_PROMPT_MARKER))))
                 .toList();
     }
 
