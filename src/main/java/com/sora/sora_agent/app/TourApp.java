@@ -4,6 +4,7 @@ import com.sora.sora_agent.advisor.MyLoggerAdvisor;
 import com.sora.sora_agent.config.ModelConfig;
 import com.sora.sora_agent.config.ToolConfig;
 import com.sora.sora_agent.rag.QueryRewriter;
+import com.sora.sora_agent.rag.TourAppRagCustomAdvisorFactory;
 import com.sora.sora_agent.service.ModelFallbackService;
 import com.sora.sora_agent.service.ModelFallbackService.ModelInvokeInfo;
 import com.sora.sora_agent.service.ModelFallbackService.StreamModelResult;
@@ -11,7 +12,6 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.tool.ToolCallback;
@@ -143,7 +143,7 @@ public class TourApp {
                         .build())
                 .user(rewrittenMessage)
                 .advisors(spec -> spec.param(CONVERSATION_ID, chatId))
-                .advisors(QuestionAnswerAdvisor.builder(tourappVectorStore).build())
+                .advisors(TourAppRagCustomAdvisorFactory.createTourAppRagCustomAdvisor(tourappVectorStore))
                 .call()
                 .chatResponse();
         String content = response.getResult().getOutput().getText();
