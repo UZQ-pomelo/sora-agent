@@ -25,6 +25,17 @@ function formatTime(t: string | null): string {
     minute: '2-digit',
   })
 }
+
+/** 会话 token 占用百分比（0-100）。 */
+function usagePercent(c: ConversationSummary): number {
+  if (!c.tokensBudget || c.tokensBudget <= 0) return 0
+  return Math.min(((c.tokens ?? 0) / c.tokensBudget) * 100, 100)
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
+  return String(n)
+}
 </script>
 
 <template>
@@ -60,6 +71,20 @@ function formatTime(t: string | null): string {
             <span class="block text-xs text-warm-400 mt-0.5">
               {{ c.messageCount }} 条 · {{ formatTime(c.lastTime) }}
             </span>
+            <div
+              v-if="c.tokensBudget && c.tokensBudget > 0"
+              class="mt-1.5 flex items-center gap-1.5"
+            >
+              <div class="flex-1 h-1 rounded-full bg-warm-100 overflow-hidden">
+                <div
+                  class="h-full rounded-full bg-accent-300"
+                  :style="{ width: usagePercent(c) + '%' }"
+                ></div>
+              </div>
+              <span class="text-[10px] text-warm-400 tabular-nums shrink-0">
+                {{ formatTokens(c.tokens ?? 0) }}/{{ formatTokens(c.tokensBudget) }}
+              </span>
+            </div>
           </button>
         </li>
       </ul>

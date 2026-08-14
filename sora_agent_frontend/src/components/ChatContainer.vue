@@ -11,6 +11,7 @@ import type {
   AgentState,
   ModelOption,
   ModelInfo,
+  ContextUsage,
   ConversationSummary,
   HistoryMessage,
 } from '@/types/chat'
@@ -76,6 +77,7 @@ const chatId = ref<string>(resolveChatIdFromUrl())
 const isStreaming = ref(false)
 const sseConnection = ref<{ abort: () => void } | null>(null)
 const agentState = ref<AgentState | null>(null)
+const contextUsage = ref<ContextUsage | null>(null)
 const messagesContainer = ref<HTMLElement | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 
@@ -150,6 +152,7 @@ function sendMessage(rawText: string) {
   messages.value.push(userMsg)
   agentState.value = null
   currentModelInfo.value = null
+  contextUsage.value = null
 
   // Create placeholder assistant message
   messages.value.push({
@@ -190,6 +193,9 @@ function sendMessage(rawText: string) {
     onModelInfo(info: ModelInfo) {
       currentModelInfo.value = info
     },
+    onContextUsage(usage: ContextUsage) {
+      contextUsage.value = usage
+    },
   })
 
   sseConnection.value = es
@@ -212,6 +218,7 @@ function newConversation() {
   chatId.value = uuid()
   currentModelInfo.value = null
   agentState.value = null
+  contextUsage.value = null
   showConversationPanel.value = false
   // 清除 URL 上的会话参数，回到全新会话
   if (props.config.useChatId) {
@@ -334,6 +341,12 @@ onBeforeUnmount(() => {
 
 // --- Expose for parent ---
 defineExpose({ newConversation })
+
+/** 将 token 数格式化为紧凑展示（如 12.6k）。 */
+function formatTokens(n: number): string {
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
+  return String(n)
+}
 </script>
 
 <template>
@@ -429,6 +442,26 @@ defineExpose({ newConversation })
         </div>
       </div>
     </header>
+
+    <!-- Context usage bar（流式期间展示实时上下文用量） -->
+    <div
+      v-if="contextUsage && isStreaming"
+      class="shrink-0 px-6 py-1.5 border-b border-warm-100 bg-white/70"
+    >
+      <div class="max-w-3xl mx-auto flex items-center gap-2">
+        <span class="text-[11px] text-warm-400 shrink-0">上下文</span>
+        <div class="flex-1 h-1.5 rounded-full bg-warm-100 overflow-hidden">
+          <div
+            class="h-full rounded-full transition-all duration-300"
+            :class="contextUsage.ratio >= 0.9 ? 'bg-red-400' : contextUsage.ratio >= 0.7 ? 'bg-amber-400' : 'bg-accent-400'"
+            :style="{ width: Math.min(contextUsage.ratio * 100, 100) + '%' }"
+          ></div>
+        </div>
+        <span class="text-[11px] text-warm-400 shrink-0 tabular-nums">
+          {{ formatTokens(contextUsage.used) }} / {{ formatTokens(contextUsage.budget) }}
+        </span>
+      </div>
+    </div>
 
     <!-- Messages area -->
     <main

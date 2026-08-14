@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sora.sora_agent.agent.SoraManus;
 import com.sora.sora_agent.app.TourApp;
 import com.sora.sora_agent.chatmemory.ConversationMemory;
+import com.sora.sora_agent.chatmemory.ContextBudgetService;
 import com.sora.sora_agent.common.BaseResponse;
 import com.sora.sora_agent.common.ThrowUtils;
 import com.sora.sora_agent.config.ModelConfig;
@@ -66,6 +67,9 @@ public class AiController {
 
     @Resource
     private ConversationMemory conversationMemory;
+
+    @Resource
+    private ContextBudgetService contextBudgetService;
 
     @Resource
     private ConversationService conversationService;
@@ -245,6 +249,7 @@ public class AiController {
                 : EMPTY_TOOL_PROVIDER;
         SoraManus soraManus = new SoraManus(allTools, effectiveMcp, dashscopeChatModel, targetModel);
         soraManus.setConversationMemory(conversationMemory);
+        soraManus.setContextBudgetService(contextBudgetService);
         soraManus.setTenant(tenantOf(request));
         soraManus.setSkillLoader(skillLoader);
         soraManus.setWorkflowLoader(workflowLoader);

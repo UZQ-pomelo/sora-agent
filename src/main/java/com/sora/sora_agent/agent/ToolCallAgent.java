@@ -80,6 +80,13 @@ public class ToolCallAgent extends ReActAgent {
     /** 内部注入的 nextStepPrompt 消息的元数据标记（持久化时据此过滤，不落库）。 */
     public static final String NEXT_STEP_PROMPT_MARKER = "sora.internal.nextStepPrompt";
 
+    /**
+     * 循环内上下文裁剪钩子：在拼装 Prompt 前调用。默认空实现，子类可重写
+     * 按 token 预算裁剪 {@code messageList}，防止工具结果/多轮消息撑爆上下文窗口。
+     */
+    protected void beforePrompt() {
+    }
+
     @Override
     public boolean think() {
         if (getNextStepPrompt() != null && !getNextStepPrompt().isEmpty()) {
@@ -89,6 +96,8 @@ public class ToolCallAgent extends ReActAgent {
                     .build();
             getMessageList().add(userMessage);
         }
+        // 循环内上下文裁剪钩子（子类可按 token 预算裁剪 messageList，避免工具结果撑爆窗口）
+        beforePrompt();
         List<Message> messageList = getMessageList();
         Prompt prompt = new Prompt(messageList, chatOptions);
         try {

@@ -8,7 +8,7 @@
 import type { SSEOptions } from '@/types/chat'
 
 export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
-  const { url, onMessage, onError, onComplete, onOpen, onAgentState, onModelInfo } = opts
+  const { url, onMessage, onError, onComplete, onOpen, onAgentState, onModelInfo, onContextUsage } = opts
 
   const controller = new AbortController()
   let aborted = false
@@ -99,6 +99,19 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
               const parsed = JSON.parse(data)
               if (parsed.model !== undefined) {
                 onModelInfo?.(parsed)
+              }
+            } catch {
+              // 解析失败则忽略
+            }
+            continue
+          }
+
+          // 处理 context_usage 命名事件（上下文 token 用量）
+          if (eventType === 'context_usage') {
+            try {
+              const parsed = JSON.parse(data)
+              if (parsed.budget !== undefined) {
+                onContextUsage?.(parsed)
               }
             } catch {
               // 解析失败则忽略

@@ -32,6 +32,10 @@ export interface ConversationSummary {
   conversationId: string
   title: string
   messageCount: number
+  /** 估算 token 占用（会话列表展示用） */
+  tokens?: number
+  /** 上下文预算（默认模型窗口） */
+  tokensBudget?: number
   lastTime: string | null
 }
 
@@ -43,6 +47,14 @@ export interface HistoryMessage {
 
 export type SSEEventType = 'message' | 'error' | 'open' | 'close'
 
+/** 上下文用量 — 对应后端 context_usage 命名事件 */
+export interface ContextUsage {
+  step: number
+  used: number
+  budget: number
+  ratio: number
+}
+
 export interface SSEOptions {
   url: string
   onMessage: (chunk: string) => void
@@ -53,4 +65,6 @@ export interface SSEOptions {
   onAgentState?: (state: AgentState) => void
   /** 收到后端发送的 model_info 命名事件时触发 */
   onModelInfo?: (info: ModelInfo) => void
+  /** 收到后端发送的 context_usage 命名事件时触发（上下文 token 用量） */
+  onContextUsage?: (usage: ContextUsage) => void
 }

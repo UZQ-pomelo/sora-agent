@@ -2,6 +2,7 @@ package com.sora.sora_agent.agent;
 
 import com.sora.sora_agent.advisor.MyLoggerAdvisor;
 import com.sora.sora_agent.chatmemory.ConversationMemory;
+import com.sora.sora_agent.chatmemory.ContextBudgetService;
 import com.sora.sora_agent.skill.Skill;
 import com.sora.sora_agent.skill.SkillLoader;
 import com.sora.sora_agent.multiagent.WorkerAgent;
@@ -12,11 +13,13 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 
@@ -33,12 +36,22 @@ public class SoraManus extends ToolCallAgent {
     /** 租户命名空间（由 API Key 派生），隔离不同调用方的会话记忆 */
     private String tenant;
 
+    /** token 预算服务（可选；注入后启用循环内上下文裁剪 + context_usage 事件） */
+    private ContextBudgetService budgetService;
+
+    /** 固定前缀消息数（加载的历史 + 首条用户任务），循环内裁剪不触碰此前缀 */
+    private int pinnedPrefixSize = 0;
+
     public void setConversationMemory(ConversationMemory conversationMemory) {
         this.conversationMemory = conversationMemory;
     }
 
     public void setTenant(String tenant) {
         this.tenant = tenant;
+    }
+
+    public void setContextBudgetService(ContextBudgetService budgetService) {
+        this.budgetService = budgetService;
     }
 
     /** 技能体系（可选；注入后 systemPrompt 追加可用技能清单） */
@@ -166,6 +179,8 @@ public class SoraManus extends ToolCallAgent {
                 // 死循环比对只针对本轮新增消息，避免把加载的历史当重复
                 this.setStuckCompareFrom(historySize);
                 this.getMessageList().add(new org.springframework.ai.chat.messages.UserMessage(userPrompt));
+                // 固定前缀 = 历史 + 首条用户任务；循环内裁剪不触碰它，保证保存逻辑的 historySize 锚点有效
+                this.pinnedPrefixSize = this.getMessageList().size();
 
                 try {
                     for (int i = 0; i < this.getMaxSteps()
@@ -179,6 +194,8 @@ public class SoraManus extends ToolCallAgent {
                         String stepResult = step();
                         String result = "Step " + stepNumber + ": " + stepResult;
                         emitter.send(result);
+                        // 每步结束后推送上下文用量（供前端实时填充条）
+                        emitContextUsage(emitter, stepNumber);
 
                         if (isStuck()) {
                             this.setStuckCount(this.getStuckCount() + 1);
@@ -262,6 +279,91 @@ public class SoraManus extends ToolCallAgent {
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
                 .replace("\r", "\\r");
+    }
+
+    /**
+     * 循环内上下文裁剪：messageList 估算 token 超预算时，裁剪「固定前缀之后」的步骤消息
+     * （nextStepPrompt + 工具结果），保留前缀（历史 + 首条用户任务）不动——这样保存逻辑的
+     * historySize 锚点始终有效。工具调用对（AssistantMessage 带 toolCalls + 紧随的
+     * ToolResponseMessage）成组保留，避免拆散导致模型无法关联工具结果。
+     * budgetService 未注入时无操作。
+     */
+    @Override
+    protected void beforePrompt() {
+        if (budgetService == null) {
+            return;
+        }
+        List<Message> messages = getMessageList();
+        int budget = budgetService.historyBudget(lockedModel);
+        if (budgetService.estimateTokens(messages, lockedModel) <= budget) {
+            return;
+        }
+        int prefixCount = Math.min(pinnedPrefixSize, messages.size());
+        List<Message> prefix = new ArrayList<>(messages.subList(0, prefixCount));
+        int remaining = budget - budgetService.estimateTokens(prefix, lockedModel);
+        List<Message> steps = messages.subList(prefixCount, messages.size());
+        List<Message> keptSteps = trimTail(steps, lockedModel, Math.max(remaining, 1));
+        List<Message> rebuilt = new ArrayList<>(prefix);
+        rebuilt.addAll(keptSteps);
+        setMessageList(rebuilt);
+        log.info("循环内上下文裁剪: 消息 {} → {}（预算 {} token）",
+                messages.size(), rebuilt.size(), budget);
+    }
+
+    /** 从尾部保留最近消息，累计 token 不超过预算；工具结果与其前的工具调用消息成对保留。 */
+    private List<Message> trimTail(List<Message> messages, String model, int budget) {
+        List<Message> kept = new ArrayList<>();
+        int tokens = 0;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            Message m = messages.get(i);
+            if (m instanceof ToolResponseMessage) {
+                Message am = (i - 1 >= 0) ? messages.get(i - 1) : null;
+                int pairTokens = tokenOf(model, m) + (am != null ? tokenOf(model, am) : 0);
+                if (!kept.isEmpty() && tokens + pairTokens > budget) {
+                    break;
+                }
+                if (am != null) {
+                    kept.add(0, am);
+                    tokens += tokenOf(model, am);
+                    i--;
+                }
+                kept.add(0, m);
+                tokens += tokenOf(model, m);
+            } else {
+                int t = tokenOf(model, m);
+                if (!kept.isEmpty() && tokens + t > budget) {
+                    break;
+                }
+                kept.add(0, m);
+                tokens += t;
+            }
+        }
+        if (kept.isEmpty() && !messages.isEmpty()) {
+            kept.add(messages.get(messages.size() - 1));
+        }
+        return kept;
+    }
+
+    private int tokenOf(String model, Message m) {
+        return budgetService.estimateTokens(m.getText(), model);
+    }
+
+    /** 推送上下文用量命名事件（前端实时填充条）。 */
+    private void emitContextUsage(SseEmitter emitter, int step) {
+        if (budgetService == null) {
+            return;
+        }
+        try {
+            int used = budgetService.estimateTokens(getMessageList(), lockedModel);
+            int budget = budgetService.historyBudget(lockedModel);
+            double ratio = budget > 0 ? (double) used / budget : 0.0;
+            String json = "{\"step\":" + step + ",\"used\":" + used
+                    + ",\"budget\":" + budget
+                    + ",\"ratio\":" + String.format(java.util.Locale.ROOT, "%.2f", ratio) + "}";
+            emitter.send(SseEmitter.event().name("context_usage").data(json));
+        } catch (Exception e) {
+            log.debug("发送 context_usage 失败: {}", e.getMessage());
+        }
     }
 
     /**
