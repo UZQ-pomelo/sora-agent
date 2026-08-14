@@ -1,6 +1,7 @@
 package com.sora.sora_agent.chatmemory;
 
 import com.sora.sora_agent.config.ConversationMemoryProperties;
+import com.sora.sora_agent.config.ModelConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -30,12 +31,18 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link ConversationMemory} 单元测试 — 全 Mock，离线可跑。
+ *
+ * <p>测试用种子比例 1.0（1 字符 = 1 token），消息固定 100 字符，使 token 断言可手工推导。
+ * 预算 = contextTokens(2000) − 开销(0) = 2000；高水位 1000、低水位 500。</p>
  */
 class ConversationMemoryTest {
+
+    private static final String MODEL = "m";
 
     private PgChatMemory chatMemory;
     private ChatModel chatModel;
     private ConversationMemoryProperties props;
+    private ContextBudgetService budgetService;
     private ConversationMemory memory;
 
     @BeforeEach
@@ -44,14 +51,28 @@ class ConversationMemoryTest {
         chatModel = mock(ChatModel.class);
         props = new ConversationMemoryProperties();
         props.setNamespace("manus");
-        memory = new ConversationMemory(chatMemory, chatModel, props);
+        props.setSeedCharPerToken(1.0);
+        props.setSeedOverheadTokens(0.0);
+        props.setOutputReserveRatio(0.0);
+        props.setHighWatermarkRatio(0.5);
+        props.setLowWatermarkRatio(0.25);
+
+        ModelConfig.ModelEntry entry = new ModelConfig.ModelEntry();
+        entry.setName(MODEL);
+        entry.setContextTokens(2000);
+        ModelConfig modelConfig = new ModelConfig();
+        modelConfig.setAvailable(List.of(entry));
+
+        budgetService = new ContextBudgetService(modelConfig, props);
+        memory = new ConversationMemory(chatMemory, chatModel, props, budgetService);
     }
 
+    /** 每轮 = UserMessage(100) + AssistantMessage(100) = 200 token。 */
     private List<Message> msgs(int rounds) {
         List<Message> list = new ArrayList<>();
         for (int i = 0; i < rounds; i++) {
-            list.add(new UserMessage("用户问题" + i));
-            list.add(new AssistantMessage("助手回答" + i));
+            list.add(new UserMessage("u".repeat(100)));
+            list.add(new AssistantMessage("a".repeat(100)));
         }
         return list;
     }
@@ -62,64 +83,62 @@ class ConversationMemoryTest {
     }
 
     @Test
-    void loadReturnsAllWhenWithinWindow() {
-        List<Message> stored = msgs(5);
+    void loadReturnsAllWhenWithinBudget() {
+        List<Message> stored = msgs(5); // 1000 token < 预算 2000
         when(chatMemory.get("tenant1:manus:abc")).thenReturn(stored);
-        assertEquals(stored.size(), memory.load("abc", "tenant1").size());
+        assertEquals(stored.size(), memory.load("abc", "tenant1", MODEL).size());
     }
 
     @Test
     void loadReturnsEmptyWhenNothingStored() {
         when(chatMemory.get("tenant1:manus:abc")).thenReturn(List.of());
-        assertTrue(memory.load("abc", "tenant1").isEmpty());
+        assertTrue(memory.load("abc", "tenant1", MODEL).isEmpty());
     }
 
     @Test
-    void loadReturnsAlreadyCompactedDataDirectly() {
-        // DB 已裁剪：首条 user + 摘要 system + 窗口消息 → 直接返回，不再摘要
-        List<Message> compacted = List.of(
-                new UserMessage("首条标题"),
-                new SystemMessage(ConversationMemory.SUMMARY_PREFIX + "这是已落库摘要"),
-                new UserMessage("最近问题"),
-                new AssistantMessage("最近回答"));
-        when(chatMemory.get("tenant1:manus:abc")).thenReturn(compacted);
+    void loadTrimsByTokenNotCount() {
+        // 单条 3000 字符 = 3000 token > 预算 2000，尽管仅 2 条消息也触发裁剪（证明按 token 非条数）
+        List<Message> huge = List.of(
+                new UserMessage("x".repeat(3000)),
+                new AssistantMessage("y"));
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(huge);
+        stubSummary("摘要");
 
-        List<Message> loaded = memory.load("abc", "tenant1");
-        assertEquals(4, loaded.size()); // 原样返回
-        verify(chatModel, never()).call(any(Prompt.class));
+        List<Message> loaded = memory.load("abc", "tenant1", MODEL);
+        assertTrue(budgetService.estimateTokens(loaded, MODEL) <= 2000,
+                "裁剪后应回到预算内，实际 " + budgetService.estimateTokens(loaded, MODEL));
+        assertTrue(loaded.stream().noneMatch(m -> m.getText().length() > 100), "超大标题应被丢弃");
     }
 
     @Test
-    void loadSummarizesLegacyOverflowInMemory() {
-        props.setWindowSize(2); // 保留最近 2 条
-        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
-        stubSummary("这是前情摘要");
+    void loadTrimsWhenOverBudget() {
+        List<Message> stored = msgs(11); // 2200 token > 预算 2000
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(stored);
+        stubSummary("摘要");
 
-        List<Message> loaded = memory.load("abc", "tenant1");
-        assertEquals(3, loaded.size()); // 摘要 + 2 条保留
-        assertTrue(loaded.get(0) instanceof SystemMessage);
-        assertTrue(loaded.get(0).getText().contains("这是前情摘要"));
-        assertEquals("用户问题4", loaded.get(1).getText());
-        assertEquals("助手回答4", loaded.get(2).getText());
+        List<Message> loaded = memory.load("abc", "tenant1", MODEL);
+        assertTrue(budgetService.estimateTokens(loaded, MODEL) < budgetService.estimateTokens(stored, MODEL),
+                "超预算应裁剪（token 应减少）");
+        assertTrue(loaded.get(0) instanceof UserMessage, "首条 user 作标题锚点");
+        assertTrue(loaded.stream().anyMatch(m -> m instanceof SystemMessage), "应含摘要");
     }
 
     @Test
     void loadDropsOverflowWhenSummarizeFails() {
-        props.setWindowSize(2);
-        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(11));
         when(chatModel.call(any(Prompt.class))).thenThrow(new RuntimeException("模型不可用"));
 
-        List<Message> loaded = memory.load("abc", "tenant1");
-        assertEquals(2, loaded.size());
-        assertTrue(loaded.stream().noneMatch(m -> m instanceof SystemMessage));
+        List<Message> loaded = memory.load("abc", "tenant1", MODEL);
+        assertTrue(loaded.size() < 22);
+        assertTrue(loaded.stream().noneMatch(m -> m instanceof SystemMessage), "摘要失败不应残留摘要");
     }
 
     @Test
     void loadSkipsSummarizeWhenDisabled() {
-        props.setWindowSize(2);
         props.setSummarizeOverflow(false);
-        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5));
-        assertEquals(2, memory.load("abc", "tenant1").size());
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(11));
+        List<Message> loaded = memory.load("abc", "tenant1", MODEL);
+        assertTrue(loaded.size() < 22);
         verify(chatModel, never()).call(any(Prompt.class));
     }
 
@@ -131,7 +150,7 @@ class ConversationMemoryTest {
                 new SystemMessage("系统提示不应落库"),
                 new AssistantMessage("回答"));
         when(chatMemory.get("tenant1:manus:abc")).thenReturn(List.of()); // compact 读空，不裁剪
-        memory.save("abc", "tenant1", messages);
+        memory.save("abc", "tenant1", MODEL, messages);
         ArgumentCaptor<List<Message>> captor = ArgumentCaptor.forClass(List.class);
         verify(chatMemory).add(eq("tenant1:manus:abc"), captor.capture());
         List<Message> saved = captor.getValue();
@@ -143,36 +162,35 @@ class ConversationMemoryTest {
 
     @Test
     void saveSkipsWhenNothingToStore() {
-        memory.save("abc", "tenant1", List.of());
+        memory.save("abc", "tenant1", MODEL, List.of());
         verify(chatMemory, never()).add(anyString(), anyList());
-        memory.save("abc", "tenant1", null);
+        memory.save("abc", "tenant1", MODEL, null);
         verify(chatMemory, never()).add(anyString(), anyList());
     }
 
     @Test
-    void saveCompactsWhenOverThreshold() {
-        props.setWindowSize(2); // 阈值 = 2*2 = 4 条对话
-        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(5)); // 10 条对话 > 4
+    @SuppressWarnings("unchecked")
+    void saveCompactsWhenOverHighWatermark() {
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(6)); // 1200 token > 高水位 1000
         stubSummary("新摘要");
 
-        memory.save("abc", "tenant1", List.of(new UserMessage("新问题"), new AssistantMessage("新回答")));
+        memory.save("abc", "tenant1", MODEL,
+                List.of(new UserMessage("新问题"), new AssistantMessage("新回答")));
 
-        // 触发 replace（写侧裁剪）
         ArgumentCaptor<List<Message>> captor = ArgumentCaptor.forClass(List.class);
         verify(chatMemory).replace(eq("tenant1:manus:abc"), captor.capture());
         List<Message> rebuilt = captor.getValue();
-        // 首条 user + 摘要 + 最近 2 条
-        assertEquals(4, rebuilt.size());
-        assertTrue(rebuilt.get(0) instanceof UserMessage); // 首条标题
-        assertTrue(rebuilt.get(1) instanceof SystemMessage); // 摘要
-        assertTrue(rebuilt.get(1).getText().startsWith(ConversationMemory.SUMMARY_PREFIX));
+        assertTrue(rebuilt.size() < 12, "压缩后应小于原 12 条");
+        assertTrue(rebuilt.get(0) instanceof UserMessage, "标题锚点");
+        assertTrue(rebuilt.stream().anyMatch(m -> m instanceof SystemMessage
+                && m.getText().startsWith(ConversationMemory.SUMMARY_PREFIX)), "应含摘要");
     }
 
     @Test
-    void saveDoesNotCompactWhenUnderThreshold() {
-        props.setWindowSize(5); // 阈值 10 条
-        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(2)); // 4 条 < 10
-        memory.save("abc", "tenant1", List.of(new UserMessage("x"), new AssistantMessage("y")));
+    void saveDoesNotCompactWhenUnderHighWatermark() {
+        when(chatMemory.get("tenant1:manus:abc")).thenReturn(msgs(2)); // 400 token < 高水位 1000
+        memory.save("abc", "tenant1", MODEL,
+                List.of(new UserMessage("x"), new AssistantMessage("y")));
         verify(chatMemory, never()).replace(anyString(), anyList());
     }
 

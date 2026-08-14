@@ -102,19 +102,28 @@ app:
     # dir: ./agents
   # 会话记忆（Manus 智能体跨请求记忆 + 「对话记录」）
   memory:
-    namespace: manus          # 会话命名空间（与其它 agent 类型隔离）
-    window-size: 20           # 上下文保留最近消息条数，超出则压缩为摘要
-    summarize-overflow: true  # 超窗是否生成摘要（关闭则直接丢弃超窗部分）
-    summarize-input-limit: 8000
-    title-max-length: 30      # 会话列表标题截断长度
+    namespace: manus            # 会话命名空间（与其它 agent 类型隔离）
+    default-context-tokens: 64000   # 模型未配 context-tokens 时用的默认上下文窗口（token 数）
+    output-reserve-ratio: 0.25      # 输出预留比例：窗口同时容纳输入+输出，按比例给回复留空间
+    high-watermark-ratio: 0.90      # 压缩高水位：历史估算 token 超历史预算该比例时触发压缩
+    low-watermark-ratio: 0.60       # 压缩低水位：压缩后压到该比例，留缓冲避免每轮都摘要
+    seed-char-per-token: 2.5        # 字符/token 比例种子（冷启动初值，随 usage 反馈自适应收敛）
+    seed-overhead-tokens: 4000      # 固定开销种子（system prompt + 工具定义，随 usage 收敛）
+    summarize-overflow: true        # 超预算是否生成摘要（关闭则直接丢弃超预算部分）
+    summarize-input-limit: 3200     # 送入摘要模型的文本上限（token 数）
+    title-max-length: 30            # 会话列表标题截断长度
   models:
     available:
       - name: deepseek-v3.2
         display: "DeepSeek V3.2"
+        context-tokens: 64000
       - name: qwen-turbo
         display: "Qwen Turbo"
+        context-tokens: 131072
       - name: qwen-plus
         display: "Qwen Plus"
+        context-tokens: 131072
       - name: deepseek-v3
         display: "Deepseek V3"
+        context-tokens: 64000
     default-model: deepseek-v3.2

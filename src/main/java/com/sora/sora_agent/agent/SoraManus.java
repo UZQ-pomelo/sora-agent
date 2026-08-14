@@ -157,7 +157,7 @@ public class SoraManus extends ToolCallAgent {
                 injectAgentGuide();
                 // 载入会话历史（若开启记忆）
                 if (withMemory) {
-                    List<Message> history = conversationMemory.load(conversationId, tenant);
+                    List<Message> history = conversationMemory.load(conversationId, tenant, this.lockedModel);
                     if (!history.isEmpty()) {
                         this.getMessageList().addAll(history);
                         historySize = history.size();
@@ -224,7 +224,7 @@ public class SoraManus extends ToolCallAgent {
                         if (all.size() > historySize) {
                             List<Message> newMessages = all.subList(historySize, all.size());
                             try {
-                                conversationMemory.save(conversationId, tenant, filterInternalPrompts(newMessages));
+                                conversationMemory.save(conversationId, tenant, this.lockedModel, filterInternalPrompts(newMessages));
                             } catch (Exception e) {
                                 log.error("会话记忆持久化失败, chatId={}: {}", conversationId, e.getMessage());
                             }

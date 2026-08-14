@@ -1,8 +1,12 @@
 package com.sora.sora_agent.config;
 
+import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import com.sora.sora_agent.chatmemory.ContextBudgetService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
@@ -17,21 +21,26 @@ import java.util.concurrent.Semaphore;
  * <p>配合虚拟线程使用：虚拟线程提供并发头部空间，本装饰器把真实 DashScope 并发
  * 限制在配置值内（默认 16），避免打爆 API 额度（429 风暴）。</p>
  *
- * <p>同时做业务指标埋点：LLM 调用次数、失败次数、耗时（Micrometer）。</p>
+ * <p>同时做业务指标埋点（Micrometer）：LLM 调用次数、失败次数、耗时；并把模型上报
+ * 的真实 {@code promptTokens} 喂给 {@link ContextBudgetService} 做上下文 token 标定。</p>
  */
+@Slf4j
 public class LlmLimitedChatModel implements ChatModel {
 
     private final ChatModel delegate;
     private final Semaphore semaphore;
     private final MeterRegistry meterRegistry;
+    private final ContextBudgetService budgetService;
     private final Counter callsCounter;
     private final Counter failuresCounter;
     private final Timer durationTimer;
 
-    public LlmLimitedChatModel(ChatModel delegate, Semaphore semaphore, MeterRegistry meterRegistry) {
+    public LlmLimitedChatModel(ChatModel delegate, Semaphore semaphore,
+                               MeterRegistry meterRegistry, ContextBudgetService budgetService) {
         this.delegate = delegate;
         this.semaphore = semaphore;
         this.meterRegistry = meterRegistry;
+        this.budgetService = budgetService;
         this.callsCounter = Counter.builder("llm.calls").description("LLM 调用总次数").register(meterRegistry);
         this.failuresCounter = Counter.builder("llm.failures").description("LLM 调用失败次数").register(meterRegistry);
         this.durationTimer = Timer.builder("llm.duration").description("LLM 调用耗时").register(meterRegistry);
@@ -43,7 +52,9 @@ public class LlmLimitedChatModel implements ChatModel {
         return durationTimer.record(() -> {
             try {
                 callsCounter.increment();
-                return delegate.call(prompt);
+                ChatResponse response = delegate.call(prompt);
+                recordUsage(prompt, response);
+                return response;
             } catch (Exception e) {
                 failuresCounter.increment();
                 throw e;
@@ -60,6 +71,32 @@ public class LlmLimitedChatModel implements ChatModel {
                 .doOnSubscribe(s -> callsCounter.increment())
                 .doOnError(e -> failuresCounter.increment())
                 .doFinally(signal -> semaphore.release());
+    }
+
+    /**
+     * usage 标定（仅同步 call 路径；agent 的 think() 走 sync call，stream 暂不采集）。
+     * 标定失败绝不影响主流程。
+     */
+    private void recordUsage(Prompt prompt, ChatResponse response) {
+        try {
+            Usage usage = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
+            if (usage == null || usage.getPromptTokens() == null) {
+                return;
+            }
+            String contents = prompt.getContents();
+            int textChars = contents == null ? 0 : contents.length();
+            budgetService.recordUsage(modelOf(prompt), usage.getPromptTokens(), textChars);
+        } catch (Exception e) {
+            log.debug("上下文 token 标定失败（忽略）: {}", e.getMessage());
+        }
+    }
+
+    private String modelOf(Prompt prompt) {
+        ChatOptions opts = prompt.getOptions();
+        if (opts instanceof DashScopeChatOptions ds) {
+            return ds.getModel();
+        }
+        return null;
     }
 
     private void acquire() {

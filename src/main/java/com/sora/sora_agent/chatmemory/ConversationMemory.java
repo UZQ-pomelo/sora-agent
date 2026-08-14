@@ -12,19 +12,24 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
  * 会话记忆服务：无状态 agent + 外部记忆（写侧裁剪 + 摘要落库）。
  *
+ * <p>上下文按 <b>token 预算</b>管理（替代旧的「消息条数」窗口）：</p>
  * <ul>
- *   <li>{@link #save}：只持久化 user/assistant 文本消息；末尾触发写侧裁剪，把超窗
- *       部分压缩成摘要落库（SystemMessage，带 {@link #SUMMARY_PREFIX} 前缀），并删除
- *       overflow 原始行，防止 DB 无限增长。</li>
- *   <li>{@link #load}：直接读回（DB 已裁剪为「标题首条 + 摘要 + 窗口消息」）；
- *       对未裁剪的旧数据，仍走内存摘要兜底（向后兼容）。</li>
+ *   <li>{@link #load}：读回会话，若超预算则裁剪（旧数据兼容路径，内存裁剪不落库）。</li>
+ *   <li>{@link #save}：只持久化 user/assistant 文本消息；末尾触发写侧裁剪
+ *       （{@link #compact}），超预算部分压缩成摘要落库（SystemMessage，带
+ *       {@link #SUMMARY_PREFIX} 前缀）或直接丢弃，防止 DB 无限增长。</li>
  * </ul>
+ *
+ * <p>token 估算与预算由 {@link ContextBudgetService} 提供（按模型自适应标定）。</p>
  */
 @Slf4j
 @Component
@@ -36,55 +41,39 @@ public class ConversationMemory {
     private final PgChatMemory chatMemory;
     private final ChatModel chatModel;
     private final ConversationMemoryProperties props;
+    private final ContextBudgetService budgetService;
 
     public ConversationMemory(PgChatMemory chatMemory,
                               ChatModel chatModel,
-                              ConversationMemoryProperties props) {
+                              ConversationMemoryProperties props,
+                              ContextBudgetService budgetService) {
         this.chatMemory = chatMemory;
         this.chatModel = chatModel;
         this.props = props;
+        this.budgetService = budgetService;
     }
 
     /**
-     * 载入会话历史。
+     * 载入会话历史（超预算则裁剪）。
      *
      * @param tenant 租户命名空间（由 API Key 派生），隔离不同调用方的会话
+     * @param model  本次任务使用的模型（决定 token 预算口径）
      */
-    public List<Message> load(String conversationId, String tenant) {
+    public List<Message> load(String conversationId, String tenant, String model) {
         List<Message> all = chatMemory.get(namespaced(tenant, conversationId));
         if (all == null || all.isEmpty()) {
             return List.of();
         }
-        // 已写侧裁剪（含摘要 system 消息）→ 直接返回「标题 + 摘要 + 窗口」
-        if (all.stream().anyMatch(this::isSummaryMessage)) {
-            return all;
-        }
-        // 未裁剪的旧数据：走内存摘要兜底（向后兼容）
-        int window = Math.max(props.getWindowSize(), 1);
-        if (all.size() <= window) {
-            return all;
-        }
-        if (!props.isSummarizeOverflow()) {
-            return all.subList(all.size() - window, all.size());
-        }
-        List<Message> overflow = all.subList(0, all.size() - window);
-        List<Message> keep = all.subList(all.size() - window, all.size());
-        String summary = summarize(null, overflow);
-        if (summary == null || summary.isBlank()) {
-            return keep;
-        }
-        List<Message> result = new ArrayList<>(keep.size() + 1);
-        result.add(summaryMessage(summary));
-        result.addAll(keep);
-        return result;
+        return trimToBudget(all, model, budgetService.historyBudget(model));
     }
 
     /**
      * 持久化本轮新增消息（仅 user/assistant 文本），末尾触发写侧裁剪。
      *
      * @param tenant 租户命名空间（由 API Key 派生）
+     * @param model  本次任务使用的模型
      */
-    public void save(String conversationId, String tenant, List<Message> messages) {
+    public void save(String conversationId, String tenant, String model, List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
             return;
         }
@@ -97,7 +86,7 @@ public class ConversationMemory {
         }
         String key = namespaced(tenant, conversationId);
         chatMemory.add(key, textOnly);
-        compact(key);
+        compact(key, model);
     }
 
     /**
@@ -108,47 +97,97 @@ public class ConversationMemory {
     }
 
     /**
-     * 写侧裁剪：对话消息数超过 2 倍窗口时，把超窗部分压缩进摘要落库并删除原始行。
+     * 写侧裁剪：历史估算 token 超过高水位时，压缩到低水位（摘要落库或直接丢弃）。
      * 保留首条 user 消息作会话列表标题锚点。
      */
-    private void compact(String key) {
-        if (!props.isSummarizeOverflow()) {
-            return;
-        }
+    private void compact(String key, String model) {
         List<Message> all = chatMemory.get(key);
         if (all == null || all.isEmpty()) {
             return;
         }
-        // 分离：已落库摘要 vs 真实对话
+        int budget = budgetService.historyBudget(model);
+        int highWatermark = (int) Math.floor(budget * props.getHighWatermarkRatio());
+        if (budgetService.estimateTokens(all, model) <= highWatermark) {
+            return; // 未到高水位，不裁剪（避免每轮都做 LLM 摘要）
+        }
+        int lowWatermark = (int) Math.floor(budget * props.getLowWatermarkRatio());
+        List<Message> trimmed = trimToBudget(all, model, lowWatermark);
+        chatMemory.replace(key, trimmed);
+        log.info("会话压缩完成: {}（token {} → 目标 {}）",
+                key, budgetService.estimateTokens(all, model), budgetService.estimateTokens(trimmed, model));
+    }
+
+    /**
+     * 裁剪到目标 token 预算。优先级：最近窗口（最高，必须放进预算）→ 摘要（次之）
+     * → 首条 user 标题锚点（尽力保留，超大则丢弃）。关闭摘要则直接丢弃溢出。
+     * 未超预算时原样返回。
+     */
+    private List<Message> trimToBudget(List<Message> all, String model, int targetBudget) {
+        if (budgetService.estimateTokens(all, model) <= targetBudget) {
+            return all;
+        }
         List<Message> summaries = all.stream().filter(this::isSummaryMessage).toList();
         List<Message> dialogs = all.stream().filter(m -> !isSummaryMessage(m)).toList();
-        int window = Math.max(props.getWindowSize(), 1);
-        if (dialogs.size() <= window * 2) {
-            return; // 缓冲：未超太多不裁剪，避免每轮都做 LLM 摘要
-        }
         Message firstUser = dialogs.stream()
                 .filter(m -> m instanceof UserMessage)
                 .findFirst().orElse(null);
-        List<Message> keep = dialogs.subList(dialogs.size() - window, dialogs.size());
-        List<Message> overflow = new ArrayList<>(dialogs.subList(0, dialogs.size() - window));
-        if (firstUser != null) {
-            overflow.remove(firstUser); // 保留首条 user 作标题
+
+        // 1) 最近窗口：从尾部往前填，累计 token 不超预算（标题单独处理）
+        //    用身份集合记录保留的消息——Message 是 record（按值相等），重复文本必须按身份区分
+        List<Message> keep = new ArrayList<>();
+        Set<Message> keptByIdentity = Collections.newSetFromMap(new IdentityHashMap<>());
+        int keepTokens = 0;
+        for (int i = dialogs.size() - 1; i >= 0; i--) {
+            Message m = dialogs.get(i);
+            if (m == firstUser) {
+                continue;
+            }
+            int t = budgetService.estimateTokens(m.getText(), model);
+            if (keepTokens + t > targetBudget) {
+                break;
+            }
+            keep.add(0, m);
+            keptByIdentity.add(m);
+            keepTokens += t;
         }
-        String prior = summaries.isEmpty()
+        // 兜底：预算小到连一条都放不下，至少保留最后一条（尽力而为，可能略超预算）
+        if (keep.isEmpty() && !dialogs.isEmpty()) {
+            Message last = dialogs.get(dialogs.size() - 1);
+            keep.add(last);
+            keptByIdentity.add(last);
+        }
+
+        // 2) 溢出 = 既非标题、也不在保留窗口内的对话（按身份判断）
+        List<Message> overflow = new ArrayList<>();
+        for (Message m : dialogs) {
+            if (m == firstUser || keptByIdentity.contains(m)) {
+                continue;
+            }
+            overflow.add(m);
+        }
+
+        // 3) 摘要（整合旧摘要 + 新增溢出；关闭摘要则丢弃溢出）
+        String priorSummary = summaries.isEmpty()
                 ? null
                 : summaries.get(0).getText().substring(SUMMARY_PREFIX.length());
-        String newSummary = summarize(prior, overflow);
-        // 重组：首条 user + 摘要 + 最近 window 条
-        List<Message> rebuilt = new ArrayList<>();
-        if (firstUser != null) {
-            rebuilt.add(firstUser);
+        String newSummary = null;
+        if (props.isSummarizeOverflow() && !overflow.isEmpty()) {
+            newSummary = summarize(priorSummary, overflow, model);
         }
-        if (newSummary != null && !newSummary.isBlank()) {
-            rebuilt.add(summaryMessage(newSummary));
+
+        // 4) 重组：标题（尽力）+ 摘要 + 最近窗口
+        List<Message> rebuilt = new ArrayList<>();
+        if (firstUser != null
+                && budgetService.estimateTokens(firstUser.getText(), model) <= targetBudget / 3) {
+            rebuilt.add(firstUser); // 超大首条不值得占位，直接丢弃标题锚点
+        }
+        String summaryText = (newSummary != null && !newSummary.isBlank()) ? newSummary
+                : (priorSummary != null && !priorSummary.isBlank() ? priorSummary : null);
+        if (summaryText != null) {
+            rebuilt.add(summaryMessage(summaryText));
         }
         rebuilt.addAll(keep);
-        chatMemory.replace(key, rebuilt);
-        log.info("会话压缩完成: {}（对话 {} 条 → 保留 {} 条 + 摘要）", key, dialogs.size(), keep.size());
+        return rebuilt;
     }
 
     private boolean isSummaryMessage(Message m) {
@@ -169,7 +208,7 @@ public class ConversationMemory {
     /**
      * 摘要 LLM 调用：若有旧摘要，要求整合（保留旧内容 + 合并新增）。
      */
-    private String summarize(String priorSummary, List<Message> delta) {
+    private String summarize(String priorSummary, List<Message> delta, String model) {
         String text = delta.stream()
                 .map(Message::getText)
                 .filter(t -> t != null && !t.isBlank())
@@ -177,8 +216,10 @@ public class ConversationMemory {
         if (text.isEmpty()) {
             return priorSummary; // 无新增可总结，复用旧摘要
         }
-        if (text.length() > props.getSummarizeInputLimit()) {
-            text = text.substring(0, props.getSummarizeInputLimit());
+        int limitTokens = Math.max(props.getSummarizeInputLimit(), 1);
+        if (budgetService.estimateTokens(text, model) > limitTokens) {
+            int maxChars = (int) Math.floor(limitTokens * budgetService.charPerToken(model));
+            text = text.substring(0, Math.min(maxChars, text.length()));
         }
         StringBuilder prompt = new StringBuilder();
         if (priorSummary != null && !priorSummary.isBlank()) {

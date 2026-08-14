@@ -26,6 +26,7 @@ public interface ChatMemoryMessageMapper extends BaseMapper<ChatMemoryMessage> {
             + "   WHERE m.conversation_id = c.conversation_id AND LOWER(m.message_type) = 'user' "
             + "   ORDER BY m.message_index ASC LIMIT 1) AS title, "
             + "  COUNT(*) AS messageCount, "
+            + "  SUM(LENGTH(COALESCE(c.message_text, ''))) AS totalChars, "
             + "  MAX(c.id) AS lastId, "
             + "  MAX(c.create_time) AS lastTime "
             + "FROM chat_memory_message c "

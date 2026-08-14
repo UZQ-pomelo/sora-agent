@@ -44,6 +44,11 @@ public class ConversationService {
             if (s.getTitle() != null && s.getTitle().length() > props.getTitleMaxLength()) {
                 s.setTitle(s.getTitle().substring(0, props.getTitleMaxLength()) + "…");
             }
+            // 估算 token 占用与预算（会话列表展示用；模型无关，用种子比例 + 默认窗口近似）
+            long chars = s.getTotalChars() == null ? 0 : s.getTotalChars();
+            double ratio = Math.max(props.getSeedCharPerToken(), 1.0);
+            s.setTokens((long) Math.ceil(chars / ratio));
+            s.setTokensBudget(props.getDefaultContextTokens());
         });
         return list;
     }
