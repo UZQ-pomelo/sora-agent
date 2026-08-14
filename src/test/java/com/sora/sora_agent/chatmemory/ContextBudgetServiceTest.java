@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 
 import java.util.List;
@@ -68,12 +69,23 @@ class ContextBudgetServiceTest {
     }
 
     @Test
+    void estimateTokensCountsToolResponseData() {
+        // ToolResponseMessage.getText() 恒为空串，但 estimateTokens 必须读到 responseData
+        ToolResponseMessage toolMsg = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse("id1", "webSearch", "结果文本")))
+                .build();
+        assertTrue(toolMsg.getText().isEmpty(), "前置：Spring AI 工具结果 getText() 应为空");
+        assertEquals(2, service.estimateTokens(toolMsg, "m")); // 4 字符 ÷ 2.0 = 2
+        assertEquals(2, service.estimateTokens(List.of(toolMsg), "m"));
+    }
+
+    @Test
     void recordUsageConvergesRatioDownwardWhenOverheadHigh() {
         double seedRatio = service.charPerToken("m");
         assertEquals(2.0, seedRatio, 1e-9);
 
         // 观测：promptTokens 偏高（固定开销大）→ 反推出比例应下调
-        service.recordUsage("m", 9000, 8000);
+        service.recordUsage("m", 9000, List.of(new UserMessage("x".repeat(8000))));
 
         double newRatio = service.charPerToken("m");
         assertTrue(newRatio < seedRatio, "开销偏高时应下调比例，实际 " + newRatio);
@@ -82,8 +94,8 @@ class ContextBudgetServiceTest {
     @Test
     void recordUsageIgnoresInvalidInput() {
         double before = service.charPerToken("m");
-        service.recordUsage("m", 0, 100);
-        service.recordUsage("m", 100, 0);
+        service.recordUsage("m", 0, List.of(new UserMessage("x")));
+        service.recordUsage("m", 100, List.of());
         assertEquals(before, service.charPerToken("m"), 1e-9);
     }
 }

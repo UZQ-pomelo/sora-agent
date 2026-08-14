@@ -83,9 +83,7 @@ public class LlmLimitedChatModel implements ChatModel {
             if (usage == null || usage.getPromptTokens() == null) {
                 return;
             }
-            String contents = prompt.getContents();
-            int textChars = contents == null ? 0 : contents.length();
-            budgetService.recordUsage(modelOf(prompt), usage.getPromptTokens(), textChars);
+            budgetService.recordUsage(modelOf(prompt), usage.getPromptTokens(), prompt.getInstructions());
         } catch (Exception e) {
             log.debug("上下文 token 标定失败（忽略）: {}", e.getMessage());
         }

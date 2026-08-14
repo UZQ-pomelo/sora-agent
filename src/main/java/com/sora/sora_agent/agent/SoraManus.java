@@ -345,7 +345,7 @@ public class SoraManus extends ToolCallAgent {
     }
 
     private int tokenOf(String model, Message m) {
-        return budgetService.estimateTokens(m.getText(), model);
+        return budgetService.estimateTokens(m, model);
     }
 
     /** 推送上下文用量命名事件（前端实时填充条）。 */

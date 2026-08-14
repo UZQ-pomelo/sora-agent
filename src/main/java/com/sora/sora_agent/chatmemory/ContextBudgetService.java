@@ -3,11 +3,14 @@ package com.sora.sora_agent.chatmemory;
 import com.sora.sora_agent.config.ConversationMemoryProperties;
 import com.sora.sora_agent.config.ModelConfig;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.stream.Collectors;
 
 /**
  * 上下文 token 预算服务：按模型估算「历史可用 token 预算」与「消息列表 token 数」。
@@ -53,18 +56,17 @@ public class ContextBudgetService {
         return Math.max((int) Math.floor(window - overhead), MIN_HISTORY_BUDGET);
     }
 
-    /** 估算消息列表的 token 数（只按文本字符数，忽略元数据/工具定义）。 */
+    /** 估算消息列表的 token 数（按文本字符数，含工具结果；忽略元数据/工具定义）。 */
     public int estimateTokens(List<Message> messages, String model) {
-        if (messages == null || messages.isEmpty()) {
+        return estimateTokens(charCount(messages), model);
+    }
+
+    /** 估算单条消息的 token 数（含工具结果）。 */
+    public int estimateTokens(Message message, String model) {
+        if (message == null) {
             return 0;
         }
-        long chars = messages.stream()
-                .mapToLong(m -> {
-                    String t = m.getText();
-                    return t == null ? 0 : t.length();
-                })
-                .sum();
-        return estimateTokens(chars, model);
+        return estimateTokens(messageText(message), model);
     }
 
     /** 估算一段文本的 token 数。 */
@@ -94,10 +96,14 @@ public class ContextBudgetService {
      *
      * @param model        模型名（null/空白走默认桶）
      * @param promptTokens 模型上报的输入 token 总数（含 system+工具定义+消息文本）
-     * @param textChars    消息文本字符总数（不含 system prompt 与工具定义）
+     * @param messages     送入模型的消息列表（据此计算含工具结果的文本字符数）
      */
-    public void recordUsage(String model, int promptTokens, int textChars) {
-        if (promptTokens <= 0 || textChars <= 0) {
+    public void recordUsage(String model, int promptTokens, List<Message> messages) {
+        if (promptTokens <= 0) {
+            return;
+        }
+        long textChars = charCount(messages);
+        if (textChars <= 0) {
             return;
         }
         ModelBudgetState s = state(model);
@@ -118,6 +124,34 @@ public class ContextBudgetService {
             return 0;
         }
         return (int) Math.ceil(chars / state(model).charPerToken);
+    }
+
+    /** 消息列表的总文本字符数（含工具结果）。 */
+    private static long charCount(List<Message> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return 0;
+        }
+        return messages.stream()
+                .mapToLong(m -> {
+                    String t = messageText(m);
+                    return t == null ? 0 : t.length();
+                })
+                .sum();
+    }
+
+    /**
+     * 消息的文本内容。关键：{@link ToolResponseMessage#getText()} 恒为空串（Spring AI 把
+     * 工具结果放在 {@code getResponses()} 里），必须显式读取 responseData，否则工具结果
+     * 会被统计成 0 token，导致循环内裁剪失效。
+     */
+    private static String messageText(Message m) {
+        if (m instanceof ToolResponseMessage trm) {
+            return trm.getResponses().stream()
+                    .map(ToolResponseMessage.ToolResponse::responseData)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.joining("\n"));
+        }
+        return m.getText();
     }
 
     private double overheadTokens(String model) {
