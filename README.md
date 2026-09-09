@@ -1,359 +1,229 @@
+# Sora Agent
 
-<p align="center">
-  <h1 align="center">🤖 Sora Agent</h1>
-  <p align="center">
-    <strong>基于 Spring AI Alibaba 的通用 AI Agent 框架</strong>
-    <br />
-    ReAct 推理循环 · 多工具编排 · 模型自动降级 · 流式对话
-  </p>
-</p>
+基于 Spring AI Alibaba 的通用 AI Agent 服务端 + Vue 3 前端。核心是 ReAct 推理循环，叠加可声明的 Skill / Workflow / Multi-agent 能力体系、工具编排、模型自动降级与按 token 预算管理的会话记忆。
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen?style=flat-square&logo=springboot" alt="Spring Boot" />
-  <img src="https://img.shields.io/badge/Java-21-orange?style=flat-square&logo=openjdk" alt="Java" />
-  <img src="https://img.shields.io/badge/Vue-3-4FC08D?style=flat-square&logo=vuedotjs" alt="Vue" />
-  <img src="https://img.shields.io/badge/TypeScript-5-blue?style=flat-square&logo=typescript" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/Spring%20AI-Alibaba-00A86B?style=flat-square" alt="Spring AI" />
-  <img src="https://img.shields.io/badge/DashScope-SDK-FF6A00?style=flat-square" alt="DashScope" />
-  <img src="https://img.shields.io/badge/LangChain4j-1.15-006A4E?style=flat-square" alt="LangChain4j" />
-  <img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=flat-square&logo=postgresql" alt="pgvector" />
-  <img src="https://img.shields.io/badge/Tailwind-CSS-06B6D4?style=flat-square&logo=tailwindcss" alt="Tailwind" />
-  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/Status-Alpha-FF4088?style=flat-square" alt="Status" />
-</p>
+## 技术栈
 
----
+| 层 | 技术 |
+|------|------|
+| 后端 | Spring Boot 3.5、Spring AI / Spring AI Alibaba 1.1.2（DashScope） |
+| 语言 | Java 21（虚拟线程）、Maven 3.9+ |
+| 数据 | PostgreSQL（对话记忆 + pgvector 向量检索）、MyBatis-Plus |
+| 模型 | 阿里云百炼 DashScope（deepseek / qwen 多模型，可配降级链） |
+| 前端 | Vue 3、TypeScript、Tailwind CSS、Vite |
+| 工具 | Exa Search、Jsoup、iText、Spring AI MCP Client |
+| 文档 | Knife4j / OpenAPI 3 |
 
-## 🧠 架构概览
+## 特性
 
-```mermaid
-graph TB
-    subgraph Frontend["Vue 3 前端"]
-        SSE["SSE 流式消费"]
-        ModelSel["模型选择"]
-        MdRender["Markdown 渲染"]
-    end
+- **ReAct 推理引擎** — think → act → step 循环，Agent 自主决定何时调用工具、何时给出最终回答。配三重死循环检测（文本重复 / 连续同工具 / 工具振荡模式），自动注入提示引导跳出，超限强制 STUCK 终止。
+- **三大声明式能力** — 技能（Skill）、工作流（Workflow）、多 Agent 编排（Multi-agent），均通过声明式 YAML 定义、由工具结果通道驱动，零引擎改动即可扩展。见「能力体系」。
+- **工具系统** — 7 个本地工具（网页搜索 / 内容抓取 / 文件读写 / 资源下载 / 终端操作 / PDF 生成 / 任务终止）+ 可选 MCP 远程工具。危险工具默认关闭，按 `app.security.tools.*` 显式开启。
+- **模型自动降级** — 按配置顺序 fallback；按 HTTP 状态码区分致命（401/403）与可恢复错误，致命错误直接中断不降级。SSE `model_info` 事件告知前端实际命中模型。
+- **会话记忆 + 上下文管理** — 跨请求持久化（PostgreSQL），写侧裁剪 + 摘要落库防 DB 无限增长；上下文按 **token 预算**（非消息条数）管理，字符/token 比例与固定开销随真实 `usage` 反馈自适应标定。见「会话记忆与上下文管理」。
+- **RAG** — pgvector 向量检索 + Query Rewrite + 关键词元数据增强，多文档分批写入。
+- **可观测性** — Spring Boot Actuator + Micrometer LLM 业务指标（调用量 / 失败 / 耗时）。
+- **前端** — 模型选择、流式输出（Markdown 渲染）、对话记录面板、实时上下文用量条。
 
-    subgraph API["Spring Boot API 层"]
-        AiCtrl["AiController<br/>SSE / Sync / Agent"]
-        ChatCtrl["ChatController<br/>旅行助手入口"]
-    end
+## 架构
 
-    subgraph Core["核心业务层"]
-        TourApp["TourApp<br/>RAG + 对话 + Fallback"]
-        SoraManus["SoraManus Agent<br/>ReAct 推理循环"]
-        ThinkAct["think() → act() → step()"]
-    end
-
-    subgraph Infra["模型 & 工具层"]
-        Fallback["ModelFallbackService<br/>自动降级链"]
-        Tools["ToolCallbacks<br/>7 个本地工具"]
-        MCP["MCP Client<br/>远程工具"]
-    end
-
-    subgraph Data["数据层"]
-        MySQL["MySQL<br/>ChatMemory"]
-        PG["PostgreSQL + pgvector<br/>RAG 向量存储"]
-    end
-
-    Frontend -->|HTTP SSE| API
-    API --> Core
-    TourApp --> Infra
-    SoraManus --> ThinkAct
-    ThinkAct --> Infra
-    Infra --> Data
-    TourApp --> Data
+```
+sora_agent_frontend (Vue 3, Vite)
+      │  HTTP / SSE（/api，经 X-API-Key 认证，vite dev 代理注入）
+      ▼
+AiController / ChatController / ImageController        ← Spring Boot, context-path=/api
+      │
+      ├── Agent 层      SoraManus（Manus 智能体，ReAct+工具） / TourApp（小途示例，RAG+对话）
+      │                    ├── Skill（UseSkillTool）  Workflow（RunWorkflowTool）  Multi-agent（DelegateTool）
+      │                    └── ToolCallback[]（本地工具 + MCP）
+      ├── 服务层        ModelFallbackService（降级链）  ConversationService（会话列表/历史）
+      ├── 记忆/上下文   ConversationMemory / PgChatMemory / ContextBudgetService
+      └── RAG           pgvector + QueryRewriter
+                │
+                ▼
+          ChatModel（DashScope，包 LLM 并发信号量 + Micrometer 指标 + usage 标定）
+                │
+                ▼
+          PostgreSQL（chat_memory_message 表 + pgvector 向量表）
 ```
 
----
+数据流：每步 `think()` 用完整消息上下文 + 工具定义拼 Prompt 调 LLM；调工具后结果回写上下文；每步结束推送进度与 `context_usage` 事件；任务结束按 token 预算写侧裁剪后落库。
 
-## ✨ 核心特性
+## 快速开始
 
-- **🧩 ReAct 推理引擎** — 完整的 think → act → step 循环，Agent 自主决策何时调用工具、何时给出最终回复
-- **🔧 多工具编排** — 7 个本地工具（文件读写、网页搜索、内容抓取、资源下载、终端操作、PDF 生成、任务终止）与 MCP 远程工具统一调度
-- **🔄 模型自动降级** — 按配置顺序自动 Fallback，区分致命错误（401/403）与可恢复错误，带完整尝试历史追踪
-- **🛡️ 三重死循环检测** — 文本重复检测 + 工具调用指纹比对 + 振荡模式识别（最近 N 步仅 2 种工具交替出现），自动注入提示引导 Agent 跳出循环
-- **📡 SSE 流式输出** — 基于 SseEmitter / Flux 的流式对话，支持 model_info 命名事件，前端实时感知模型切换
-- **📚 RAG 检索增强** — Query Rewrite + pgvector 向量存储 + 关键词元数据增强，多文档分批写入
+### 前置
 
-<details>
-<summary><strong>更多特性</strong></summary>
+| 依赖 | 版本 |
+|------|------|
+| JDK | 21+（运行时依赖虚拟线程） |
+| Maven | 3.9+ |
+| Node.js | 18+ |
+| PostgreSQL | 16 + pgvector 扩展 |
+| DashScope API Key | [阿里云百炼](https://bailian.console.aliyun.com/) |
 
-- **🎭 双模式对话** — TourApp（RAG 增强 + 对话记忆）与 Manus Agent（工具链调用）两种模式
-- **🗄️ 多数据源** — MySQL（会话记忆）+ PostgreSQL（向量存储），MyBatis-Plus ORM
-- **📝 结构化输出** — 支持 `entity(TourReport.class)` 将 LLM 回复直接映射为 Java Record
-- **🌐 Knife4j 文档** — 内置 Swagger/Knife4j API 文档，开箱即用的接口调试
-- **🎨 现代前端** — Vue 3 + TypeScript + Tailwind CSS，响应式设计，Markdown 渲染
-- **🛠️ MCP 协议** — 集成 Spring AI MCP Client，支持 stdio 远程工具服务器
-</details>
+### 配置
 
----
-
-## 🚀 快速开始
-
-### 环境要求
-
-| 依赖 | 版本 | 说明 |
-|------|------|------|
-| JDK | 21+ | 编译目标 Java 17 |
-| Node.js | 18+ | 前端构建 |
-| DashScope API Key | — | [阿里云百炼平台](https://bailian.console.aliyun.com/) 获取 |
-
-### 配置文件
-
-项目依赖 `application-local.yml` 和 `mcp-servers.json`（已在 `.gitignore` 中排除）。项目提供了示例模板，复制并填入你自己的密钥即可：
+从模板创建本地配置，填入密钥与连接串（两者均已 gitignore）：
 
 ```bash
-# 从模板创建配置文件
 cp src/main/resources/application-local.yml.example src/main/resources/application-local.yml
-cp src/main/resources/mcp-servers.json.example src/main/resources/mcp-servers.json
+cp src/main/resources/mcp-servers.json.example      src/main/resources/mcp-servers.json
 
-# 然后编辑这两个文件，填入你的 API Key 和数据库连接信息
+cp sora_agent_frontend/.env.example sora_agent_frontend/.env   # 填 SORA_API_KEY
 ```
 
-> **安全配置（必读）**：默认启用 API Key 认证。`application-local.yml` 的
-> `app.security.api-keys` 至少配置一个 key，否则应用**拒绝启动**（fail-fast，防裸奔）。
-> 开发模式下由前端 vite 代理注入 key（见 `sora_agent_frontend/.env.example` 的 `SORA_API_KEY`，注意必须用非 `VITE_` 前缀以免暴露进浏览器）；
-> 生产部署由反向代理统一注入 `X-API-Key` 请求头。
-> 危险工具（终端/文件/下载/抓取）默认全部关闭，按需在 `app.security.tools.*` 显式开启。
-> 完整验收清单见 [docs/security-checklist.md](docs/security-checklist.md)。
+`application-local.yml` 是全部可调项的权威模板（`app.*` 节点注释齐全），至少需要：
 
-### 5 分钟体验模式
+- `spring.ai.dashscope.api-key` — DashScope 模型密钥
+- `spring.datasource.url/username/password` — PostgreSQL 连接（含 `chat_memory` 表与向量表）
+- `app.security.api-keys` — 至少一个 `X-API-Key`。**未配置则应用拒绝启动**（fail-fast，防无鉴权裸奔）。开发时由前端 vite 代理注入该头；生产由反向代理统一注入。密钥必须用非 `VITE_` 前缀命名（如 `SORA_API_KEY`），避免被 `import.meta.env` 暴露进浏览器。
 
-此模式跳过 RAG 和数据库，只需 Java 和 Node.js，仅需配置 API Key。
+### 启动数据库
 
 ```bash
-# 1. 克隆项目
-git clone https://github.com/UZQ-pomelo/sora_agent.git
-cd sora_agent
+docker run -d --name sora-pg -p 5432:5432 \
+  -e POSTGRES_USER=<user> -e POSTGRES_PASSWORD=<pass> -e POSTGRES_DB=sora_agent \
+  pgvector/pgvector:pg16
+```
 
-# 2. 创建配置文件并填入 DashScope API Key（见上方"配置文件"）
+首次建表可执行 `sql/schema.sql`。
 
-# 3. 启动后端
-./mvnw spring-boot:run
+### 启动
 
-# 4. 启动前端（新终端）
+```bash
+# 后端（默认 http://localhost:8080，context-path /api）
+mvn spring-boot:run
+
+# 前端（新终端，默认 http://localhost:5173，/api 代理到 8080）
 cd sora_agent_frontend
 npm install
 npm run dev
-
-# 5. 打开浏览器 → http://localhost:5173
 ```
 
-### 完整模式（含 RAG + 对话记忆 + MCP 工具）
+默认模型为 `deepseek-v3.2`，可切换到 `qwen-turbo` / `qwen-plus` / `deepseek-v3`（前端下拉或请求参数 `model`）。
 
-完整模式需要 PostgreSQL + pgvector、MySQL 和 MCP 服务器。推荐使用 Docker Compose：
+## 配置摘要
 
-```yaml
-# docker-compose.yml（项目根目录）
-version: '3.8'
-services:
-  mysql:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: <your-password>
-      MYSQL_DATABASE: sora_agent
-    ports:
-      - "3306:3306"
+以下均为 `application-local.yml` 中 `app.*` 节点的可调项：
 
-  postgres:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_USER: <your-username>
-      POSTGRES_PASSWORD: <your-password>
-      POSTGRES_DB: sora_agent
-    ports:
-      - "5432:5432"
-```
+| 节点 | 作用 |
+|------|------|
+| `app.models.available[]` | 可用模型：`name` / `display` / `context-tokens`（上下文窗口，决定 token 预算） |
+| `app.models.default-model` | 默认模型（亦是降级链首项） |
+| `app.security.api-keys` | 合法 `X-API-Key` 列表，按 key 派生租户命名空间隔离会话 |
+| `app.security.protect-patterns` | 需认证的路径；图片代理 `/image/**` 等受信中继默认豁免 |
+| `app.security.tools.*` | 危险工具（终端 / 文件 / 下载 / 抓取）开关，默认关闭 |
+| `app.security.enable-mcp-tools` | 是否合并 MCP 工具，默认 false |
+| `app.executor.llm-max-concurrency` | 全局最大并发 LLM 调用数（默认 16，防打爆 DashScope 额度） |
+| `app.memory.*` | 会话记忆：命名空间、token 预算与压缩水位、标定种子、标题截断等 |
 
-```bash
-# 1. 启动所有依赖
-docker compose up -d
+## 能力体系
 
-# 2. 创建配置文件，填入 API Key 和数据库连接信息（见上方"配置文件"）
-#    PostgreSQL 连接地址改为 jdbc:postgresql://localhost:5432/sora_agent
+三种能力都声明在 YAML 中，Agent 侧通过对应工具按名称触发，扩展能力不碰引擎代码。
 
-# 3. 启动后端 & 前端
-./mvnw spring-boot:run
-cd sora_agent_frontend && npm run dev
-```
+| 能力 | 定义目录（classpath） | 触发工具 | 内置样例 | 文档 |
+|------|------|------|------|------|
+| Skill | `skills/*.yaml` | `useSkill` | `web-researcher` | [skill-system.md](docs/skill-system.md) |
+| Workflow | `workflows/*.yaml` | `runWorkflow` | `research-report` | [workflow.md](docs/workflow.md) |
+| Multi-agent | `agents/*.yaml` | `delegate` | `analyst`、`researcher` | [multi-agent.md](docs/multi-agent.md) |
 
-### 一行代码创建 Agent
+Agent 启动时把可用清单注入 system prompt，由模型判断何时调用对应工具；外部目录可通过 `app.executor.dir` 等配置额外加载（详见 `application-local.yml.example` 注释）。
 
-```java
-// 注入依赖
-@Resource private ToolCallback[] allTools;        // 本地工具
-@Resource private ToolCallbackProvider toolCallbacks; // MCP 工具
-@Resource private ChatModel dashscopeChatModel;   // 模型
+## 会话记忆与上下文管理
 
-// 创建并运行 Agent
-SoraManus agent = new SoraManus(allTools, toolCallbacks,
-        dashscopeChatModel, "deepseek-v4-flash");
-SseEmitter emitter = agent.runStream("帮我搜索 Spring AI 的最新资讯并生成一份 PDF 报告");
-// 前端通过 SSE 实时接收每一步的执行进展
-```
-
----
-
-## 📂 项目结构
+对话跨请求持久化在 PostgreSQL（`chat_memory_message` 表，按 `tenant:namespace:conversationId` 隔离）。核心是**按 token 预算**管理，而非固定消息条数：
 
 ```
-sora_agent/
-├── src/main/java/com/sora/sora_agent/
-│   ├── agent/                # Agent 核心引擎
-│   │   ├── BaseAgent.java        # 抽象基类：状态管理、步骤循环
-│   │   ├── ReActAgent.java       # ReAct 模式：think → act
-│   │   ├── ToolCallAgent.java    # 工具调用 + 死循环检测
-│   │   ├── SoraManus.java        # Manus 超级智能体
-│   │   └── model/AgentState.java # 状态枚举（IDLE→RUNNING→FINISHED/STUCK/ERROR）
-│   ├── app/TourApp.java      # 示例应用：旅游助手（RAG + 对话）
-│   ├── controller/           # REST API
-│   │   ├── AiController.java    # Agent / Tour 流式 & 同步接口
-│   │   └── ChatController.java  # 旅行助手对话接口
-│   ├── service/              # 模型降级服务
-│   │   └── ModelFallbackService.java  # Fallback 链 + 错误分类
-│   ├── tool/                 # 7 个本地工具
-│   │   ├── FileOperationTool.java     # 文件读写
-│   │   ├── ExaWebSearchTool.java      # 网页搜索
-│   │   ├── WebScrapingTool.java       # 内容抓取
-│   │   ├── ResourceDownloadTool.java  # 资源下载
-│   │   ├── TerminalOperationTool.java # 终端操作
-│   │   ├── PDFGenerationTool.java     # PDF 生成
-│   │   ├── TerminateTool.java         # 任务终止
-│   │   └── ToolRegistration.java      # 工具注册配置
-│   ├── rag/                  # RAG 检索增强
-│   │   ├── TourAppVectorStoreConfig.java
-│   │   ├── TourAppDocumentLoader.java
-│   │   ├── QueryRewriter.java
-│   │   └── MyKeywordMetadataEnricher.java
-│   ├── config/               # 配置（CORS、模型列表等）
-│   └── chatmemory/           # MySQL 对话记忆
-├── sora_agent_frontend/      # Vue 3 前端
-│   └── src/
-│       ├── views/            # TourChatPage / ManusChatPage / HomePage
-│       ├── components/       # ChatContainer / ChatBubble / ChatInput
-│       ├── router/           # Vue Router 路由定义
-│       ├── types/chat.ts     # TypeScript 类型定义
-│       └── utils/sse.ts      # SSE 流式客户端
-├── pom.xml                   # Maven 依赖
-└── docker-compose.yml        # 完整模式依赖编排
+历史预算(model) = contextTokens(model) × (1 − outputReserveRatio) − 固定开销(model)
+估算 tokens     = 字符数 ÷ charPerToken(model)
 ```
 
----
+- `contextTokens` 在 `app.models.available[].context-tokens` 声明；`outputReserveRatio` 默认 25%，为回复留输出空间。
+- 固定开销（system prompt + 工具定义）与字符/token 比例都是按模型的运行态估计，从每次 LLM 响应的真实 `usage.promptTokens` 反推、滚动收敛（`ContextBudgetService`）。比例种子默认 2.5 字符/token，覆盖中英混排冷启动。
+- 读侧：载入历史即按预算裁剪（首条标题 + 摘要 + 最近窗口）；写侧：落库后若超高水位（默认 90%）触发压缩到低水位（60%），溢出部分压缩成 `【会话摘要】` 落库或直接丢弃。
+- Agent 循环内同样按预算裁剪步骤消息（工具结果/nextStepPrompt 超限时丢旧留新，工具调用与结果成对保留），防止单次任务撑爆窗口。
 
-## 🏗️ 核心设计
+前端感知：每步结束收到 SSE `context_usage` 事件（`{used, budget, ratio}`）画实时用量条；会话列表接口返回每会话 `tokens / tokensBudget` 画存量条。
 
-### ReAct 推理循环
+详细设计见 [conversation-management.md](docs/conversation-management.md)。
 
-Agent 的执行遵循 **Reasoning + Acting** 模式，每一步由 `think()` 和 `act()` 两个阶段组成：
+## 示例应用：小途旅行助手
 
-```java
-// ReActAgent.step() — 核心循环（简化示意）
-public String step() {
-    boolean shouldAct = think();      // ① 推理：LLM 决定是否需要调用工具
-    if (!shouldAct) {
-        setState(AgentState.FINISHED); // LLM 给出最终回复，任务结束
-        return assistantMessage.getText();
-    }
-    return act();                     // ② 执行：调用工具，结果写回上下文
-}
-```
+`TourApp` 是框架内置的垂直示例：多轮行程规划 + RAG 知识库（`src/main/resources/document/` 三篇旅行文档）+ 结构化输出 + PDF 导出。用于演示如何基于本框架组装一个带记忆和知识库的助手。
 
-```
-用户输入 → think() → 需要工具? ──是──→ act() → 结果回写 → think() → ...
-                          │
-                          否
-                          ↓
-                    输出最终回复（FINISHED）
-```
+## API
 
-### 死循环检测
+统一前缀 `/api`，请求头携带 `X-API-Key`。交互式文档：启动后访问 `/api/swagger-ui.html`。
 
-ToolCallAgent 在父类文本重复检测之上，叠加了 **工具调用级别** 的两重检测：
-
-| 检测机制 | 判断逻辑 | 阈值 |
-|---------|---------|------|
-| **连续同工具** | 同一工具（同参数指纹）连续调用 N 次 | ≥ 4 次 |
-| **振荡模式** | 最近 N 步中仅出现 2 种工具，且各出现 M 次 | 窗口 6 步，各 ≥ 3 次 |
-
-检测到循环后，`handleStuckState()` 向 Agent 注入提示引导其调整策略；超过 `maxStuckCount` 后强制终止（`STUCK` 状态）。
-
-### 模型自动降级
-
-```
-用户请求 qwen-turbo → 403（未授权）→ fallback 至 deepseek-v4-flash → ✅ 成功
-                                                                       ↓
-                                                        前端收到 model_info 事件：
-                                                        { model: "deepseek-v4-flash", fallback: true }
-```
-
-- **Fallback 链**：目标模型排第一，其余按配置文件顺序附后
-- **错误分类**：区分超时、连接失败、限流、余额不足、403/401 等
-- **致命错误**：401（API Key 无效）、403（模型未授权）不触发 Fallback，直接中断
-
----
-
-## 🌍 示例应用 — 小途旅行助手
-
-"小途"是框架内置的示例应用，展示如何基于 Sora Agent 构建垂直领域 AI 助手。
-
-### 能力
-
-- 🗺️ **智能行程规划** — 多轮对话中理解用户偏好，结合 RAG 知识库推荐目的地和路线
-- 🍜 **美食景点推荐** — 通过 MCP 地图工具搜索周边 POI
-- 📄 **旅行报告生成** — 结构化输出 + PDF 导出
-- 🧠 **对话记忆** — MySQL ChatMemory，跨会话保持上下文
-
-### 知识库
-
-RAG 知识文档覆盖旅行规划的三大领域（可添加）：
-
-```
-src/main/resources/document/
-├── 行程规划与目的地选择.md    # 目的地推荐、行程设计
-├── 交通出行与路线决策.md      # 交通方式、路线优化
-└── 衣食住行与预算管理.md      # 住宿、美食、费用管理
-```
-
-### 接口示例
-
-```bash
-# 流式对话（SSE）
-curl -G 'http://localhost:8080/api/ai/tour_app/chat/server' \
-  --data-urlencode 'message=帮我规划3天广州亲子游' \
-  --data-urlencode 'chatId=my-session-001'
-
-# 同步对话
-curl -G 'http://localhost:8080/api/chat' \
-  --data-urlencode 'message=广州有哪些必吃的美食？' \
-  --data-urlencode 'chatId=my-session-001'
-```
-
----
-
-## 🛠️ 技术栈
-
-| 层级 | 技术 | 说明 |
+| 方法 | 路径 | 说明 |
 |------|------|------|
-| **框架** | Spring Boot 3.5、Spring AI Alibaba | 后端基础框架 + AI Agent 框架 |
-| **Agent** | ReAct 模式、ToolCallingManager | 推理-行动循环 + 工具调用管理 |
-| **模型接入** | DashScope SDK、LangChain4j | 阿里云百炼平台多模型调用 |
-| **RAG** | pgvector、Query Rewrite | PostgreSQL 向量检索 + 查询重写 |
-| **工具** | Exa Search、Jsoup、iText | 网页搜索、内容解析、PDF 生成 |
-| **MCP** | Spring AI MCP Client | stdio 远程工具服务器集成 |
-| **数据** | MySQL、PostgreSQL、MyBatis-Plus | 对话记忆 + 向量存储 |
-| **前端** | Vue 3、TypeScript、Tailwind CSS | SPA 应用，SSE 流式消费 |
-| **构建** | Vite、Maven | 前端/后端构建工具 |
-| **文档** | Knife4j / OpenAPI 3 | API 文档自动生成 |
+| GET | `/api/ai/models` | 可用模型列表 |
+| GET | `/api/ai/manus/chat?message=&chatId=&model=` | Manus 智能体 SSE 流式对话（chatId 启用记忆） |
+| GET | `/api/ai/manus/conversations` | 会话列表（含 token 用量） |
+| GET | `/api/ai/manus/conversations/{id}/messages` | 会话历史 |
+| GET | `/api/ai/workflow/run?name=&input=` | 直接运行工作流（SSE） |
+| GET | `/api/ai/tour_app/chat/sse` 等 | 小途助手流式/同步对话 |
+| POST | `/api/chat?message=&chatId=` | 直接对话（Knife4j 调试用，同步返回） |
+| GET | `/api/image/proxy` | 图片代理（受信中继，绕过浏览器防盗链） |
 
----
+SSE 命名事件：`model_info`（实际命中模型 / 降级）、`context_usage`（token 用量）、`agent_state`（终止状态）、`error`。
 
-## 📄 许可证
+## 安全模型
 
-本项目基于 [MIT License](LICENSE) 开源。
+- **认证**：`X-API-Key` 头校验，fail-fast；按 key 哈希派生租户命名空间，会话/记忆相互隔离；限流防滥用。
+- **工具风控**：SSRF 防护（UrlSafety 封内网/IPv6 过渡地址/回环）、路径穿越防护（PathSafety 校验符号链接越界）、危险工具默认关闭、终端命令白名单（CommandGuard）。
+- **输出安全**：图片代理内容类型白名单（仅栅格图）+ `nosniff`；响应安全头（CSP、X-Frame-Options: DENY 等）。
+- 完整清单与验收见 [security-checklist.md](docs/security-checklist.md)。
 
----
+## 测试
 
-<p align="center">
-  <sub>如果这个项目对你有帮助，欢迎给一个 ⭐ Star</sub>
-</p>
+```bash
+mvn test
+```
+
+约 100 个离线单元测试，无外部依赖（数据库 / 真实 LLM / MCP 均不参与）。上下文冒烟测试（`@Tag("integration")`）默认被 surefire 排除，需本地配齐环境后手动按标签运行。
+
+## 目录结构
+
+```
+src/main/java/com/sora/sora_agent/
+├── agent/        BaseAgent / ReActAgent / ToolCallAgent / SoraManus（Agent 继承链 + 状态机）
+├── skill/        Skill 体系（Skill / SkillLoader / UseSkillTool）
+├── workflow/     Workflow 体系（Workflow / WorkflowEngine / RunWorkflowTool）
+├── multiagent/   Multi-agent 体系（WorkerAgent / WorkerExecutor / DelegateTool）
+├── chatmemory/   会话记忆与上下文（PgChatMemory / ConversationMemory / ContextBudgetService）
+├── rag/          RAG（QueryRewriter、pgvector 配置、文档加载）
+├── security/     ApiKeyAuthFilter / SecurityProperties / UrlSafety / PathSafety / CommandGuard
+├── config/       模型列表、记忆参数、线程池、并发信号量、usage 标定等
+├── controller/   AiController / ChatController / ImageController
+├── service/      ModelFallbackService / ConversationService
+├── tool/         7 个本地工具 + 注册配置
+├── app/          TourApp（小途示例）
+├── advisor/      LLM 调用日志 advisor
+└── common/ exception/ mapper/ model/   通用返回、全局异常、ORM、实体/DTO
+
+src/main/resources/
+├── skills/ workflows/ agents/   声明式能力（内置样例）
+├── document/                    小途知识库（RAG 源文档）
+└── application-local.yml.example   全量配置模板
+
+sora_agent_frontend/src/
+├── views/        HomePage / ManusChatPage / TourChatPage
+├── components/   ChatContainer / ChatBubble / ChatInput / ConversationListPanel
+├── utils/        sse.ts（SSE 解析）、uuid、clipboard
+└── types/        chat.ts
+```
+
+## 文档
+
+| 主题 | 路径 |
+|------|------|
+| 安全加固清单 | [docs/security-checklist.md](docs/security-checklist.md) |
+| 会话记忆与 token 上下文管理 | [docs/conversation-management.md](docs/conversation-management.md) |
+| 技能体系 | [docs/skill-system.md](docs/skill-system.md) |
+| 工作流体系 | [docs/workflow.md](docs/workflow.md) |
+| 多 Agent 编排 | [docs/multi-agent.md](docs/multi-agent.md) |
+
+## License
+
+[MIT](LICENSE)
