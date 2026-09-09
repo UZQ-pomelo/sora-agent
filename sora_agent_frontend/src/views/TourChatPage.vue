@@ -5,8 +5,8 @@ import type { ChatPageConfig } from '@/components/ChatContainer.vue'
 const config: ChatPageConfig = {
   buildUrl: (message: string, chatId?: string, model?: string) => {
     let base = `/api/ai/tour_app/chat/server?message=${message}`
-    if (chatId) base += `&chatId=${chatId}`
-    if (model) base += `&model=${model}`
+    if (chatId) base += `&chatId=${encodeURIComponent(chatId)}`
+    if (model) base += `&model=${encodeURIComponent(model)}`
     return base
   },
   useChatId: true,

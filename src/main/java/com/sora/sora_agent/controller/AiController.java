@@ -3,22 +3,37 @@ package com.sora.sora_agent.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sora.sora_agent.agent.SoraManus;
 import com.sora.sora_agent.app.TourApp;
+import com.sora.sora_agent.chatmemory.ConversationMemory;
+import com.sora.sora_agent.chatmemory.ContextBudgetService;
 import com.sora.sora_agent.common.BaseResponse;
 import com.sora.sora_agent.common.ThrowUtils;
 import com.sora.sora_agent.config.ModelConfig;
 import com.sora.sora_agent.exception.GlobalExceptionHandler;
+import com.sora.sora_agent.model.dto.ConversationSummary;
+import com.sora.sora_agent.service.ConversationService;
 import com.sora.sora_agent.service.ModelFallbackService;
 import com.sora.sora_agent.service.ModelFallbackService.AllModelsFailedException;
+import com.sora.sora_agent.multiagent.WorkerAgentLoader;
+import com.sora.sora_agent.skill.SkillLoader;
+import com.sora.sora_agent.workflow.WorkflowEngine;
+import com.sora.sora_agent.workflow.WorkflowLoader;
 import com.sora.sora_agent.service.ModelFallbackService.ModelAttempt;
 import com.sora.sora_agent.service.ModelFallbackService.StreamModelResult;
+import com.sora.sora_agent.security.ApiKeyAuthFilter;
+import com.sora.sora_agent.security.SecurityProperties;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,11 +43,15 @@ import reactor.core.publisher.Flux;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 
 @Slf4j
 @RestController
 @RequestMapping("/ai")
 public class AiController {
+
+    /** 空 MCP 工具提供者（enableMcpTools=false 时用，避免 MCP 工具绕过本地开关） */
+    private static final ToolCallbackProvider EMPTY_TOOL_PROVIDER = () -> new ToolCallback[0];
 
     @Resource
     private TourApp tourApp;
@@ -45,6 +64,30 @@ public class AiController {
 
     @Resource
     private ModelFallbackService modelFallbackService;
+
+    @Resource
+    private ConversationMemory conversationMemory;
+
+    @Resource
+    private ContextBudgetService contextBudgetService;
+
+    @Resource
+    private ConversationService conversationService;
+
+    @Resource
+    private SkillLoader skillLoader;
+
+    @Resource
+    private WorkflowLoader workflowLoader;
+
+    @Resource
+    private WorkflowEngine workflowEngine;
+
+    @Resource
+    private WorkerAgentLoader workerAgentLoader;
+
+    @Resource
+    private ExecutorService agentExecutor;
 
     /**
      * 获取可用模型列表。
@@ -181,25 +224,103 @@ public class AiController {
     @Resource
     private ToolCallbackProvider toolCallbacks;
 
+    @Resource
+    private SecurityProperties securityProperties;
+
     /**
      * 流式调用 Manus 超级智能体（Agent 场景，无 fallback，模型在任务期内锁死）。
      *
      * @param message 用户消息
+     * @param chatId  会话 id（可选；传则载入历史 + 结束后持久化，实现跨请求记忆）
      * @param model   模型名（可选，不传使用默认模型）
      */
     @GetMapping("/manus/chat")
     public SseEmitter doChatWithManus(
             @RequestParam String message,
-            @RequestParam(required = false) String model) {
+            @RequestParam(required = false) String chatId,
+            @RequestParam(required = false) String model,
+            HttpServletRequest request) {
         String targetModel = (model != null && !model.isBlank())
                 ? model
                 : modelConfig.getDefaultModel();
-        SoraManus soraManus = new SoraManus(allTools, toolCallbacks, dashscopeChatModel, targetModel);
+        // MCP 工具默认不合并（不经 app.security.tools.* 开关过滤），enableMcpTools=true 才启用
+        ToolCallbackProvider effectiveMcp = securityProperties.isEnableMcpTools()
+                ? toolCallbacks
+                : EMPTY_TOOL_PROVIDER;
+        SoraManus soraManus = new SoraManus(allTools, effectiveMcp, dashscopeChatModel, targetModel);
+        soraManus.setConversationMemory(conversationMemory);
+        soraManus.setContextBudgetService(contextBudgetService);
+        soraManus.setTenant(tenantOf(request));
+        soraManus.setSkillLoader(skillLoader);
+        soraManus.setWorkflowLoader(workflowLoader);
+        soraManus.setAgentLoader(workerAgentLoader);
+        soraManus.setExecutorService(agentExecutor);
         // SoraManus.runStream() 内部已发送 model_info 事件
-        return soraManus.runStream(message);
+        return soraManus.runStream(message, chatId);
+    }
+
+    /**
+     * 会话列表（供前端「对话记录」面板；按 API Key 租户隔离）。
+     */
+    @GetMapping("/manus/conversations")
+    public BaseResponse<List<ConversationSummary>> listManusConversations(HttpServletRequest request) {
+        return BaseResponse.success(conversationService.listConversations(tenantOf(request)));
+    }
+
+    /**
+     * 拉取某会话的历史消息（供切换会话后渲染；按 API Key 租户隔离）。
+     */
+    @GetMapping("/manus/conversations/{conversationId}/messages")
+    public BaseResponse<List<Map<String, String>>> getManusConversationMessages(
+            @PathVariable String conversationId, HttpServletRequest request) {
+        List<Message> messages = conversationService.getHistory(conversationId, tenantOf(request));
+        List<Map<String, String>> dto = messages.stream()
+                .filter(m -> m instanceof UserMessage || m instanceof AssistantMessage)
+                .map(m -> {
+                    String role = (m instanceof UserMessage) ? "user" : "assistant";
+                    return Map.of(
+                            "role", role,
+                            "content", m.getText() == null ? "" : m.getText());
+                })
+                .toList();
+        return BaseResponse.success(dto);
+    }
+
+    /**
+     * 直接运行工作流（SSE 流式，逐步发送进度事件）。
+     *
+     * @param name  工作流名称
+     * @param input 入参 JSON 对象字符串（可选），如 {"topic":"Spring AI"}
+     */
+    @GetMapping("/workflow/run")
+    public SseEmitter runWorkflow(
+            @RequestParam String name,
+            @RequestParam(required = false) String input) {
+        Map<String, Object> params = parseWorkflowInput(input);
+        return workflowEngine.runStream(name, params);
     }
 
     // ---- 私有工具方法 ----
+
+    /**
+     * 由 API Key 派生租户命名空间（hash），隔离不同调用方的会话。
+     */
+    private String tenantOf(HttpServletRequest request) {
+        String key = request.getHeader(ApiKeyAuthFilter.API_KEY_HEADER);
+        return (key == null || key.isBlank()) ? "anon" : Integer.toHexString(key.hashCode());
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseWorkflowInput(String input) {
+        if (input == null || input.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(input, Map.class);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("工作流入参不是合法 JSON 对象: " + input);
+        }
+    }
 
     private String toModelInfoJson(ModelFallbackService.ModelInvokeInfo info) {
         StringBuilder sb = new StringBuilder();

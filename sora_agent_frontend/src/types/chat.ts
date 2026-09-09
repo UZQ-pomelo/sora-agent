@@ -27,7 +27,33 @@ export interface AgentStateEvent {
   state: AgentState
 }
 
+/** 会话记录摘要 — 对应后端 GET /api/ai/manus/conversations */
+export interface ConversationSummary {
+  conversationId: string
+  title: string
+  messageCount: number
+  /** 估算 token 占用（会话列表展示用） */
+  tokens?: number
+  /** 上下文预算（默认模型窗口） */
+  tokensBudget?: number
+  lastTime: string | null
+}
+
+/** 会话历史消息 — 对应后端 GET /api/ai/manus/conversations/{id}/messages */
+export interface HistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export type SSEEventType = 'message' | 'error' | 'open' | 'close'
+
+/** 上下文用量 — 对应后端 context_usage 命名事件 */
+export interface ContextUsage {
+  step: number
+  used: number
+  budget: number
+  ratio: number
+}
 
 export interface SSEOptions {
   url: string
@@ -39,4 +65,6 @@ export interface SSEOptions {
   onAgentState?: (state: AgentState) => void
   /** 收到后端发送的 model_info 命名事件时触发 */
   onModelInfo?: (info: ModelInfo) => void
+  /** 收到后端发送的 context_usage 命名事件时触发（上下文 token 用量） */
+  onContextUsage?: (usage: ContextUsage) => void
 }

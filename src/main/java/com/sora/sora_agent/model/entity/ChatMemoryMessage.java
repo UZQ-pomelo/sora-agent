@@ -12,7 +12,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * MySQL对话存储实体类
+ * PostgreSQL 对话存储实体类
  */
 @Data
 @NoArgsConstructor

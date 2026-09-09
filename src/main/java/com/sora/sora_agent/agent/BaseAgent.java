@@ -30,8 +30,25 @@ public abstract class BaseAgent {
     private String systemPrompt;
     private String nextStepPrompt;
 
-    // 状态
-    private AgentState state = AgentState.IDLE;
+    // 状态（volatile：容器线程 onTimeout/onCompletion 改，agent 循环线程读，需保证可见性）
+    private volatile AgentState state = AgentState.IDLE;
+
+    // 客户端连接是否已关闭（断连/超时后置位，agent 循环据此提前终止，避免空转烧 token）
+    private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * 标记连接已关闭（断连/超时调用），循环每轮检查以提前退出。
+     */
+    protected void markClosed() {
+        this.closed.set(true);
+    }
+
+    /**
+     * 连接是否已关闭。
+     */
+    protected boolean isClosed() {
+        return this.closed.get();
+    }
 
     // 执行控制
     private int maxSteps = 10;
@@ -41,6 +58,9 @@ public abstract class BaseAgent {
     private int duplicateThreshold = 2;
     private int stuckCount = 0;
     private int maxStuckCount = 2;
+
+    // 死循环文本比对起点：加载外部历史后设为历史条数，只比对本轮新增消息，避免把历史当重复
+    protected int stuckCompareFrom = 0;
 
     // LLM
     private ChatClient chatClient;
@@ -241,7 +261,7 @@ public abstract class BaseAgent {
 
         // 计算之前消息中相同内容出现的次数
         int duplicateCount = 0;
-        for (int i = messageList.size() - 2; i >= 0; i--) {
+        for (int i = messageList.size() - 2; i >= stuckCompareFrom; i--) {
             Message msg = messageList.get(i);
             String content = extractMessageContent(msg);
             if (content != null && content.equals(lastContent)) {
@@ -292,6 +312,7 @@ public abstract class BaseAgent {
     protected void cleanup() {
         // 重置死循环计数器，确保下次运行从零开始
         this.stuckCount = 0;
+        this.stuckCompareFrom = 0;
         // 子类可以重写此方法来清理资源
     }
 }

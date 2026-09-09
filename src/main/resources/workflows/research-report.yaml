@@ -1,0 +1,30 @@
+# 内置示例工作流：联网调研并生成报告
+# 展示「往 workflows/ 放一个 YAML 即可用」的加载机制（线性步骤：tool / llm）
+name: research-report
+description: 联网调研并生成结构化报告（搜索→总结→生成PDF）
+input:
+  - topic
+steps:
+  # 第1步：用搜索工具检索
+  - id: search
+    type: tool
+    tool: searchweb
+    params:
+      query: "{{input.topic}} 最新进展"
+
+  # 第2步：把搜索结果交给 LLM 总结
+  - id: summarize
+    type: llm
+    prompt: |
+      用户想调研的主题：{{input.topic}}
+      以下是搜索结果：
+      {{steps.search.result}}
+      请用中文总结关键信息，输出结构化要点列表（含关键事实与来源链接）。
+
+  # 第3步：生成 PDF
+  - id: save
+    type: tool
+    tool: generatePDF
+    params:
+      fileName: "{{input.topic}}-调研报告.pdf"
+      content: "{{steps.summarize.result}}"

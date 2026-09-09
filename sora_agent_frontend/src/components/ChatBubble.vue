@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import MarkdownIt from 'markdown-it'
 import type { ChatMessage, AgentState, ModelInfo } from '@/types/chat'
+import { safeCopy } from '@/utils/clipboard'
 
 const props = defineProps<{
   message: ChatMessage
@@ -9,10 +10,6 @@ const props = defineProps<{
   agentState?: AgentState | null
   /** 模型切换信息（收到后端 model_info 事件后传入） */
   modelInfo?: ModelInfo | null
-}>()
-
-const emit = defineEmits<{
-  (e: 'copy', content: string): void
 }>()
 
 const copied = ref(false)
@@ -25,11 +22,28 @@ const md = new MarkdownIt({
   breaks: true,
 })
 
-const renderedContent = computed(() => {
-  if (props.message.role === 'user') {
-    return props.message.content
-  }
-  return md.render(props.message.content)
+// 安全加固：linkify 生成的链接强制新标签打开并禁止 opener 窃取（反向 tabnabbing）
+md.renderer.rules.link_open = (tokens, idx, _options, _env, self) => {
+  tokens[idx].attrSet('target', '_blank')
+  tokens[idx].attrSet('rel', 'noopener noreferrer')
+  return self.renderToken(tokens, idx, _options)
+}
+
+// O(n²) 缓解：流式期间用 rAF 节流合并同一帧的多次内容更新，避免每 chunk 全量 md.render
+const renderedContent = ref<string>('')
+let renderRaf: number | null = null
+function scheduleRender() {
+  if (renderRaf != null) cancelAnimationFrame(renderRaf)
+  renderRaf = requestAnimationFrame(() => {
+    renderRaf = null
+    renderedContent.value = props.message.role === 'user'
+      ? props.message.content
+      : md.render(props.message.content)
+  })
+}
+watch(() => props.message.content, scheduleRender, { immediate: true })
+onBeforeUnmount(() => {
+  if (renderRaf != null) cancelAnimationFrame(renderRaf)
 })
 
 const isUser = computed(() => props.message.role === 'user')
@@ -68,16 +82,18 @@ const modelLabel = computed(() => {
   }
 })
 
-function onCopy() {
-  emit('copy', props.message.content)
-  copied.value = true
-  setTimeout(() => {
-    copied.value = false
-  }, 2000)
+async function onCopy() {
+  const ok = await safeCopy(props.message.content)
+  copied.value = ok
+  if (ok) {
+    setTimeout(() => {
+      copied.value = false
+    }, 2000)
+  }
 }
 
-function onCopyCode(code: string) {
-  navigator.clipboard.writeText(code)
+async function onCopyCode(code: string) {
+  await safeCopy(code)
   copiedCode.value = code
   setTimeout(() => {
     copiedCode.value = null
@@ -116,6 +132,9 @@ function onBubbleRef(el: unknown) {
 }
 
 const formattedTime = computed(() => {
+  if (props.message.timestamp === 0) {
+    return '历史' // 从会话列表载入的历史消息无真实时间
+  }
   const d = new Date(props.message.timestamp)
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 })

@@ -1,6 +1,10 @@
 package com.sora.sora_agent.controller;
 
+import com.sora.sora_agent.security.RateLimiter;
+import com.sora.sora_agent.security.SecurityProperties;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -9,43 +13,174 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URI;
+import java.util.concurrent.Semaphore;
 
 /**
- * 图片接口，提供图片代理查看能力。
+ * 图片接口 — 受信中继。
  * <p>
- * 由于 DashScope 生成的图片 URL 为临时链接且有跨域/防盗链限制，
- * 通过本地代理接口可直接在浏览器中打开查看。
+ * 仅代理 DashScope/OSS 图片域名的 http/https 地址（域名白名单见
+ * {@code app.security.image-proxy.allowed-hosts}），重定向每跳复验，
+ * 带超时、内容类型校验与大小上限，杜绝 SSRF 与 file:// 本地文件读取。
  * </p>
  */
-@Deprecated
 @Slf4j
 @RestController
 @RequestMapping("/image")
+@RequiredArgsConstructor
 public class ImageController {
 
-    /**
-     * 代理查看图片 — 将 DashScope 图片 URL 转为本地响应流输出。
-     * <p>
-     * 使用方式：浏览器访问 {@code /api/image/proxy?url=生成的图片URL}
-     * </p>
-     *
-     * @param imageUrl DashScope 返回的图片临时 URL
-     * @param response HTTP 响应
-     */
+    private static final long MAX_BYTES = 10 * 1024 * 1024L; // 10MB
+    private static final int MAX_REDIRECTS = 3;
+    private static final int CONNECT_TIMEOUT_MS = 5000;
+    private static final int READ_TIMEOUT_MS = 15000;
+
+    /** 图片代理按 IP 限流（/image/** 豁免认证，需独立防滥用） */
+    private static final int RATE_PER_MIN = 30;
+    private static final int MAX_CONCURRENCY = 16;
+
+    private final SecurityProperties securityProperties;
+    private final RateLimiter ipRateLimiter = new RateLimiter();
+    private final Semaphore imageConcurrency = new Semaphore(MAX_CONCURRENCY);
+
     @GetMapping("/proxy")
-    public void proxy(@RequestParam String imageUrl, HttpServletResponse response) {
-        try {
-            URI uri = URI.create(imageUrl);
-            try (InputStream in = uri.toURL().openStream()) {
-                response.setContentType("image/png");
-                response.setHeader("Cache-Control", "public, max-age=3600");
-                in.transferTo(response.getOutputStream());
-                response.getOutputStream().flush();
-            }
-        } catch (IOException e) {
-            log.error("图片代理失败, url: {}", imageUrl, e);
-            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+    public void proxy(@RequestParam String imageUrl, HttpServletRequest request, HttpServletResponse response) {
+        // 独立限流 + 并发上限（该端点豁免认证）
+        String ip = request.getRemoteAddr();
+        if (!ipRateLimiter.tryAcquire(ip == null ? "unknown" : ip, RATE_PER_MIN, 60_000L)) {
+            response.setStatus(429); // SC_TOO_MANY_REQUESTS 在部分 servlet 版本缺失
+            return;
         }
+        if (!imageConcurrency.tryAcquire()) {
+            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            return;
+        }
+        try {
+            String current = imageUrl;
+            for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
+                URI uri = URI.create(current);
+                String scheme = uri.getScheme();
+                String host = uri.getHost();
+                if (!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) || host == null) {
+                    response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                    return;
+                }
+                if (!isAllowedHost(host)) {
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    return;
+                }
+
+                HttpURLConnection conn = (HttpURLConnection) uri.toURL().openConnection();
+                conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                conn.setReadTimeout(READ_TIMEOUT_MS);
+                conn.setInstanceFollowRedirects(false);
+                int status = conn.getResponseCode();
+
+                if (status >= 300 && status < 400) {
+                    String location = conn.getHeaderField("Location");
+                    conn.disconnect();
+                    if (location == null) {
+                        response.setStatus(HttpServletResponse.SC_BAD_GATEWAY);
+                        return;
+                    }
+                    current = uri.resolve(location).toString();
+                    continue;
+                }
+
+                if (status != HttpServletResponse.SC_OK) {
+                    conn.disconnect();
+                    response.setStatus(status);
+                    return;
+                }
+
+                String contentType = conn.getContentType();
+                if (contentType == null || !isAllowedImageType(contentType)) {
+                    conn.disconnect();
+                    response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                    return;
+                }
+                long length = conn.getContentLengthLong();
+                if (length > MAX_BYTES) {
+                    conn.disconnect();
+                    response.setStatus(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
+                    return;
+                }
+
+                byte[] body;
+                try (InputStream in = conn.getInputStream()) {
+                    body = readBounded(in, MAX_BYTES + 1);
+                } finally {
+                    conn.disconnect();
+                }
+                if (body.length > MAX_BYTES) {
+                    log.warn("图片代理内容超限(>{})，返回 413: {}", MAX_BYTES, imageUrl);
+                    response.setStatus(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
+                    return;
+                }
+                response.setContentType(contentType);
+                response.setHeader("X-Content-Type-Options", "nosniff");
+                response.setHeader("Cache-Control", "private, max-age=3600");
+                response.setContentLength(body.length);
+                response.getOutputStream().write(body);
+                response.getOutputStream().flush();
+                return;
+            }
+            response.setStatus(HttpServletResponse.SC_BAD_GATEWAY);
+        } catch (Exception e) {
+            log.error("图片代理失败, url: {}", imageUrl, e);
+            if (!response.isCommitted()) {
+                response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+            }
+        } finally {
+            imageConcurrency.release();
+        }
+    }
+
+    /**
+     * 仅允许光栅图片类型，拒绝 image/svg+xml 等可执行内容（防 SVG-XSS：
+     * SVG 内嵌脚本会在同源部署下以应用源执行）。
+     */
+    private boolean isAllowedImageType(String contentType) {
+        if (contentType == null) {
+            return false;
+        }
+        String ct = contentType.toLowerCase();
+        return ct.startsWith("image/jpeg") || ct.startsWith("image/jpg")
+                || ct.startsWith("image/png") || ct.startsWith("image/gif")
+                || ct.startsWith("image/webp") || ct.startsWith("image/bmp");
+    }
+
+    private boolean isAllowedHost(String host) {
+        String h = host.toLowerCase();
+        for (String pattern : securityProperties.getImageProxy().getAllowedHosts()) {
+            String p = pattern.toLowerCase();
+            if (p.startsWith("*.")) {
+                if (h.endsWith(p.substring(1))) {
+                    return true;
+                }
+            } else if (h.equals(p)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 有界读取：读满 limit 字节即停止，返回已读内容（供主流程判 413）。
+     */
+    private byte[] readBounded(InputStream in, long limit) throws IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        long total = 0;
+        int n;
+        while ((n = in.read(buf)) != -1) {
+            total += n;
+            bos.write(buf, 0, n);
+            if (total > limit) {
+                break;
+            }
+        }
+        return bos.toByteArray();
     }
 }

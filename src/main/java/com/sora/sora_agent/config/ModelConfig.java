@@ -57,5 +57,7 @@ public class ModelConfig {
         private String name;
         /** 前端展示名 */
         private String display;
+        /** 模型上下文窗口 token 数（可选；缺省回落 {@code app.memory.default-context-tokens}） */
+        private Integer contextTokens;
     }
 }

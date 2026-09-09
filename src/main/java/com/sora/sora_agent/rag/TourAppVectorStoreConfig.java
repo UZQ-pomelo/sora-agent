@@ -48,13 +48,14 @@ public class TourAppVectorStoreConfig {
 
         List<Document> documents = tourAppDocumentLoader.loadMarkdowns();
 
-        //自动补充关键词元信息
+        // 自动补充关键词元信息（写入增强后的文档，而非原始文档——此前这里写入 documents
+        // 导致关键词增强结果被丢弃，excerpt_keywords 过滤链路失效）
         List<Document> enrichedDocuments = myKeywordMetadataEnricher.enrichedDocuments(documents);
         // DashScope embedding API 单次最多 10 条，分批写入
         int batchSize = 10;
-        for (int i = 0; i < documents.size(); i += batchSize) {
-            int end = Math.min(i + batchSize, documents.size());
-            store.add(documents.subList(i, end));
+        for (int i = 0; i < enrichedDocuments.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, enrichedDocuments.size());
+            store.add(enrichedDocuments.subList(i, end));
         }
         return store;
     }

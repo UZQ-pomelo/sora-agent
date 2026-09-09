@@ -244,28 +244,43 @@ public class ModelFallbackService {
 
     /**
      * 将失败原因归类为人类可读的简短描述。
+     *
+     * <p>优先用 {@link HttpStatusCodeException} 的准确状态码（不依赖文案/i18n），
+     * 字符串匹配仅作为非 HTTP 异常（超时/连接）的兜底。</p>
      */
     private String classifyFailure(Exception e) {
-        if (e.getMessage() == null) return "未知错误";
-
+        if (e instanceof HttpStatusCodeException hse) {
+            int code = hse.getStatusCode().value();
+            return switch (code) {
+                case 400 -> "请求参数错误(400)";
+                case 401 -> "API Key 无效(401)";
+                case 403 -> "模型未授权(403)";
+                case 429 -> "请求限流(429)";
+                case 500 -> "服务端错误(500)";
+                case 502, 503, 504 -> "网关错误(" + code + ")";
+                default -> "HTTP " + code;
+            };
+        }
+        if (e.getMessage() == null) {
+            return "未知错误";
+        }
         String msg = e.getMessage().toLowerCase();
-        if (msg.contains("timeout") || msg.contains("timed out")) return "超时";
-        if (msg.contains("connect") || msg.contains("refused")) return "连接失败";
-        if (msg.contains("403") || msg.contains("forbidden")) return "模型未授权(403)";
-        if (msg.contains("429")) return "请求限流(429)";
-        if (msg.contains("500") || msg.contains("internal server")) return "服务端错误(500)";
-        if (msg.contains("insufficient") || msg.contains("balance") || msg.contains("quota"))
+        if (msg.contains("timeout") || msg.contains("timed out")) {
+            return "超时";
+        }
+        if (msg.contains("connect") || msg.contains("refused")) {
+            return "连接失败";
+        }
+        if (msg.contains("insufficient") || msg.contains("balance") || msg.contains("quota")) {
             return "余额不足";
-        if (msg.contains("400") || msg.contains("bad request")) return "请求参数错误(400)";
-        if (msg.contains("401") || msg.contains("unauthorized")) return "API Key 无效(401)";
-
-        // 截断过长消息
+        }
         String shortMsg = e.getMessage();
         return shortMsg.length() > 80 ? shortMsg.substring(0, 80) + "..." : shortMsg;
     }
 
     /**
-     * 是否致命错误（不应重试）。
+     * 是否致命错误（不应重试）。401/403 为致命——API Key 无效或模型未授权，
+     * 换模型也无效，直接中断而非继续 fallback。
      */
     private boolean isFatal(Exception e) {
         if (e instanceof HttpStatusCodeException hse) {
@@ -273,7 +288,7 @@ public class ModelFallbackService {
             return code == 401 || code == 403;
         }
         String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
-        return msg.contains("403") || msg.contains("forbidden") || msg.contains("unauthorized");
+        return msg.contains("forbidden") || msg.contains("unauthorized");
     }
 
     /**

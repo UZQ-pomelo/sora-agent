@@ -3,6 +3,8 @@ package com.sora.sora_agent.agent;
 import cn.hutool.core.collection.CollUtil;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import com.sora.sora_agent.agent.model.AgentState;
+import com.sora.sora_agent.exception.AIServiceException;
+import com.sora.sora_agent.exception.ErrorCode;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
@@ -75,12 +77,27 @@ public class ToolCallAgent extends ReActAgent {
      *
      * @return 是否需要执行行动
      */
+    /** 内部注入的 nextStepPrompt 消息的元数据标记（持久化时据此过滤，不落库）。 */
+    public static final String NEXT_STEP_PROMPT_MARKER = "sora.internal.nextStepPrompt";
+
+    /**
+     * 循环内上下文裁剪钩子：在拼装 Prompt 前调用。默认空实现，子类可重写
+     * 按 token 预算裁剪 {@code messageList}，防止工具结果/多轮消息撑爆上下文窗口。
+     */
+    protected void beforePrompt() {
+    }
+
     @Override
     public boolean think() {
         if (getNextStepPrompt() != null && !getNextStepPrompt().isEmpty()) {
-            UserMessage userMessage = new UserMessage(getNextStepPrompt());
+            UserMessage userMessage = UserMessage.builder()
+                    .text(getNextStepPrompt())
+                    .metadata(java.util.Map.of(NEXT_STEP_PROMPT_MARKER, true))
+                    .build();
             getMessageList().add(userMessage);
         }
+        // 循环内上下文裁剪钩子（子类可按 token 预算裁剪 messageList，避免工具结果撑爆窗口）
+        beforePrompt();
         List<Message> messageList = getMessageList();
         Prompt prompt = new Prompt(messageList, chatOptions);
         try {
@@ -115,10 +132,10 @@ public class ToolCallAgent extends ReActAgent {
                 return true;
             }
         } catch (Exception e) {
-            log.error(getName() + "的思考过程遇到了问题: " + e.getMessage());
-            getMessageList().add(
-                    new AssistantMessage("处理时遇到错误: " + e.getMessage()));
-            return false;
+            // LLM 调用失败属致命错误：抛给 runStream 置 ERROR，而非伪装成正常回答
+            // （否则模型名无效/配额不足会变成"处理时遇到错误"的成功回复，还会污染记忆）
+            log.error(getName() + "的思考过程遇到致命错误: " + e.getMessage());
+            throw new AIServiceException(ErrorCode.AI_ERROR, "LLM 调用失败: " + e.getMessage(), e);
         }
     }
 

@@ -1,9 +1,20 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onBeforeUnmount, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import ChatBubble from './ChatBubble.vue'
 import ChatInput from './ChatInput.vue'
+import ConversationListPanel from './ConversationListPanel.vue'
 import { createSSEConnection } from '@/utils/sse'
-import type { ChatMessage, AgentState, ModelOption, ModelInfo } from '@/types/chat'
+import { uuid } from '@/utils/uuid'
+import type {
+  ChatMessage,
+  AgentState,
+  ModelOption,
+  ModelInfo,
+  ContextUsage,
+  ConversationSummary,
+  HistoryMessage,
+} from '@/types/chat'
 
 export interface ChatPageConfig {
   /** SSE URL builder: (message, chatId?, model?) => full URL */
@@ -14,6 +25,12 @@ export interface ChatPageConfig {
   title: string
   /** Page subtitle / description */
   subtitle: string
+  /** 是否显示「对话记录」按钮（会话管理能力，仅 Manus 页开启） */
+  showConversationList?: boolean
+  /** 会话列表接口地址 */
+  conversationsUrl?: string
+  /** 会话历史接口地址（用 {id} 占位会话 id） */
+  conversationMessagesUrl?: string
 }
 
 const props = defineProps<{
@@ -44,14 +61,32 @@ function onModelSelect(modelName: string) {
   currentModelInfo.value = null
 }
 
+// --- Route / session identity ---
+const route = useRoute()
+const router = useRouter()
+
+function resolveChatIdFromUrl(): string {
+  const q = route.query.chat
+  return typeof q === 'string' && q ? q : uuid()
+}
+
 // --- State ---
 const messages = ref<ChatMessage[]>([])
-const chatId = ref<string>(crypto.randomUUID())
+// 会话 id：优先从 URL（/manus?chat=xxx）恢复，否则新建
+const chatId = ref<string>(resolveChatIdFromUrl())
 const isStreaming = ref(false)
 const sseConnection = ref<{ abort: () => void } | null>(null)
 const agentState = ref<AgentState | null>(null)
+const contextUsage = ref<ContextUsage | null>(null)
 const messagesContainer = ref<HTMLElement | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
+
+// --- 对话记录 ---
+const conversations = ref<ConversationSummary[]>([])
+const conversationsLoading = ref(false)
+const showConversationPanel = ref(false)
+// 历史加载请求序号：只让最新一次请求生效，防止乱序覆盖（快速切会话/加载中发送消息）
+let historyRequestSeq = 0
 
 const hasMessages = computed(() => messages.value.length > 0)
 
@@ -68,15 +103,48 @@ function scrollToBottom(smooth = true) {
   })
 }
 
-watch(messages, () => scrollToBottom(), { deep: true })
+// 消息上限：防长会话内存/DOM 无限增长（截断保留最近 MAX_MESSAGES 条）
+const MAX_MESSAGES = 200
+watch(
+  messages,
+  (list) => {
+    if (list.length > MAX_MESSAGES) {
+      messages.value = list.slice(-MAX_MESSAGES)
+    }
+    scrollToBottom()
+  },
+  { deep: true },
+)
 
 // --- SSE ---
-function sendMessage(text: string) {
-  if (isStreaming.value || !text.trim()) return
+function sendMessage(rawText: string) {
+  if (isStreaming.value || !rawText.trim()) return
+  // 使在途的历史加载请求失效，避免其覆盖用户刚发的消息
+  historyRequestSeq++
+
+  // /skill名 [参数] 或 /workflow名 [参数] 斜杠命令 → 显式激活能力（保留后续参数）
+  let text = rawText
+  const skillMatch = text.trim().match(/^\/skill\s+(\S+)(?:\s+([\s\S]*))?$/)
+  if (skillMatch) {
+    const skillName = skillMatch[1]
+    const skillArgs = skillMatch[2]?.trim()
+    text = `请激活并使用技能「${skillName}」`
+      + (skillArgs ? `，任务内容：${skillArgs}` : '')
+      + `，按该技能的指南完成任务`
+  } else {
+    const workflowMatch = text.trim().match(/^\/workflow\s+(\S+)(?:\s+([\s\S]*))?$/)
+    if (workflowMatch) {
+      const workflowName = workflowMatch[1]
+      const workflowArgs = workflowMatch[2]?.trim()
+      text = `请运行工作流「${workflowName}」`
+        + (workflowArgs ? `，入参：${workflowArgs}` : '')
+        + `，按该工作流的固定流程执行`
+    }
+  }
 
   // Add user message
   const userMsg: ChatMessage = {
-    id: crypto.randomUUID(),
+    id: uuid(),
     role: 'user',
     content: text,
     timestamp: Date.now(),
@@ -84,10 +152,11 @@ function sendMessage(text: string) {
   messages.value.push(userMsg)
   agentState.value = null
   currentModelInfo.value = null
+  contextUsage.value = null
 
   // Create placeholder assistant message
   messages.value.push({
-    id: crypto.randomUUID(),
+    id: uuid(),
     role: 'assistant',
     content: '',
     timestamp: Date.now(),
@@ -108,9 +177,10 @@ function sendMessage(text: string) {
     },
     onError(error: string) {
       if (error.startsWith('⚠️')) {
-        if (!reactiveMsg.content) {
-          reactiveMsg.content = error
-        }
+        // 空气泡直接显示错误；已有内容时追加错误标记，不再静默吞掉
+        reactiveMsg.content = reactiveMsg.content
+          ? `${reactiveMsg.content}\n\n${error}`
+          : error
       }
     },
     onComplete() {
@@ -122,6 +192,9 @@ function sendMessage(text: string) {
     },
     onModelInfo(info: ModelInfo) {
       currentModelInfo.value = info
+    },
+    onContextUsage(usage: ContextUsage) {
+      contextUsage.value = usage
     },
   })
 
@@ -140,21 +213,127 @@ function newConversation() {
   if (isStreaming.value) {
     stopStreaming()
   }
+  historyRequestSeq++
   messages.value = []
-  chatId.value = crypto.randomUUID()
+  chatId.value = uuid()
   currentModelInfo.value = null
+  agentState.value = null
+  contextUsage.value = null
+  showConversationPanel.value = false
+  // 清除 URL 上的会话参数，回到全新会话
+  if (props.config.useChatId) {
+    router.replace({ query: {} })
+  }
 }
 
-function copyMessage(content: string) {
-  navigator.clipboard.writeText(content)
+// --- 对话记录 ---
+function toggleConversationPanel() {
+  showConversationPanel.value = !showConversationPanel.value
+  if (showConversationPanel.value && conversations.value.length === 0) {
+    fetchConversations()
+  }
+}
+
+async function fetchConversations() {
+  if (!props.config.conversationsUrl) return
+  conversationsLoading.value = true
+  try {
+    const resp = await fetch(props.config.conversationsUrl)
+    const json = await resp.json()
+    if (json?.data) {
+      conversations.value = json.data as ConversationSummary[]
+    }
+  } catch {
+    console.warn('获取会话列表失败')
+  } finally {
+    conversationsLoading.value = false
+  }
+}
+
+async function switchConversation(id: string) {
+  if (id === chatId.value && messages.value.length > 0) {
+    showConversationPanel.value = false
+    return
+  }
+  if (isStreaming.value) {
+    stopStreaming()
+  }
+  const prevChatId = chatId.value
+  chatId.value = id
+  currentModelInfo.value = null
+  agentState.value = null
+  if (props.config.useChatId) {
+    router.replace({ query: { chat: id } })
+  }
+  const ok = await loadHistory(id)
+  if (!ok) {
+    // 加载失败回滚：恢复原 chatId 与 URL，避免 UI 与持久化错位
+    chatId.value = prevChatId
+    if (props.config.useChatId) {
+      router.replace(prevChatId ? { query: { chat: prevChatId } } : { query: {} })
+    }
+  }
+  showConversationPanel.value = false
+}
+
+async function loadHistory(id: string): Promise<boolean> {
+  if (!props.config.conversationMessagesUrl) return false
+  const seq = ++historyRequestSeq
+  try {
+    const url = props.config.conversationMessagesUrl.replace('{id}', encodeURIComponent(id))
+    const resp = await fetch(url)
+    const json = await resp.json()
+    // 防乱序：仅最新一次请求生效（快速切会话/期间发送了消息则忽略过期响应）
+    if (seq !== historyRequestSeq) return false
+    if (json?.data) {
+      const history = json.data as HistoryMessage[]
+      messages.value = history.map((m) => ({
+        id: uuid(),
+        role: m.role,
+        content: m.content,
+        // 历史消息无真实时间：标记 0，ChatBubble 显示「历史」
+        timestamp: 0,
+      }))
+      return true
+    }
+    return false
+  } catch {
+    if (seq === historyRequestSeq) console.warn('加载会话历史失败')
+    return false
+  }
+}
+
+// 浏览器前进/后退导致的 chat 参数变化 → 切换会话（switchConversation 内已有防抖守卫）
+watch(
+  () => route.query.chat,
+  (v) => {
+    const cid = typeof v === 'string' && v ? v : null
+    if (cid && cid !== chatId.value) {
+      switchConversation(cid)
+    }
+  },
+)
+
+// --- 面板点击外部关闭 ---
+function onDocumentClick() {
+  if (showConversationPanel.value) {
+    showConversationPanel.value = false
+  }
 }
 
 // --- Lifecycle ---
 onMounted(() => {
   fetchModels()
+  document.addEventListener('click', onDocumentClick)
+  // 若 URL 带了 chat 参数，恢复该会话历史
+  const q = route.query.chat
+  if (typeof q === 'string' && q && props.config.useChatId) {
+    loadHistory(q)
+  }
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick)
   if (sseConnection.value) {
     sseConnection.value.abort()
   }
@@ -162,6 +341,12 @@ onBeforeUnmount(() => {
 
 // --- Expose for parent ---
 defineExpose({ newConversation })
+
+/** 将 token 数格式化为紧凑展示（如 12.6k）。 */
+function formatTokens(n: number): string {
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
+  return String(n)
+}
 </script>
 
 <template>
@@ -193,7 +378,7 @@ defineExpose({ newConversation })
           </div>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 relative">
           <!-- Model selector -->
           <select
             v-model="selectedModel"
@@ -213,6 +398,23 @@ defineExpose({ newConversation })
             </option>
           </select>
 
+          <!-- Conversation history button -->
+          <button
+            v-if="config.showConversationList"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
+                   text-warm-500 hover:text-accent-600 hover:bg-accent-50
+                   rounded-lg transition-colors duration-150 shrink-0"
+            title="对话记录"
+            @click.stop="toggleConversationPanel"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="16" rx="2"/>
+              <line x1="8" y1="9" x2="16" y2="9"/>
+              <line x1="8" y1="13" x2="13" y2="13"/>
+            </svg>
+            <span>对话记录</span>
+          </button>
+
           <!-- New conversation button -->
           <button
             class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
@@ -226,9 +428,40 @@ defineExpose({ newConversation })
             </svg>
             <span>新建对话</span>
           </button>
+
+          <!-- Conversation list panel -->
+          <ConversationListPanel
+            v-if="config.showConversationList"
+            :visible="showConversationPanel"
+            :loading="conversationsLoading"
+            :conversations="conversations"
+            :active-id="chatId"
+            @select="switchConversation"
+            @close="showConversationPanel = false"
+          />
         </div>
       </div>
     </header>
+
+    <!-- Context usage bar（流式期间展示实时上下文用量） -->
+    <div
+      v-if="contextUsage && isStreaming"
+      class="shrink-0 px-6 py-1.5 border-b border-warm-100 bg-white/70"
+    >
+      <div class="max-w-3xl mx-auto flex items-center gap-2">
+        <span class="text-[11px] text-warm-400 shrink-0">上下文</span>
+        <div class="flex-1 h-1.5 rounded-full bg-warm-100 overflow-hidden">
+          <div
+            class="h-full rounded-full transition-all duration-300"
+            :class="contextUsage.ratio >= 0.9 ? 'bg-red-400' : contextUsage.ratio >= 0.7 ? 'bg-amber-400' : 'bg-accent-400'"
+            :style="{ width: Math.min(contextUsage.ratio * 100, 100) + '%' }"
+          ></div>
+        </div>
+        <span class="text-[11px] text-warm-400 shrink-0 tabular-nums">
+          {{ formatTokens(contextUsage.used) }} / {{ formatTokens(contextUsage.budget) }}
+        </span>
+      </div>
+    </div>
 
     <!-- Messages area -->
     <main
@@ -267,7 +500,6 @@ defineExpose({ newConversation })
           :is-streaming="isStreaming && msg === messages[messages.length - 1] && msg.role === 'assistant'"
           :agent-state="(!isStreaming && idx === messages.length - 1 && msg.role === 'assistant') ? agentState : null"
           :model-info="(idx === messages.length - 1 && msg.role === 'assistant') ? currentModelInfo : null"
-          @copy="copyMessage"
         />
         <!-- Bottom spacer for comfortable scrolling -->
         <div class="h-4"></div>

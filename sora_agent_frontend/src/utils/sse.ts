@@ -8,7 +8,7 @@
 import type { SSEOptions } from '@/types/chat'
 
 export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
-  const { url, onMessage, onError, onComplete, onOpen, onAgentState, onModelInfo } = opts
+  const { url, onMessage, onError, onComplete, onOpen, onAgentState, onModelInfo, onContextUsage } = opts
 
   const controller = new AbortController()
   let aborted = false
@@ -39,7 +39,7 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
       let buffer = ''
 
       while (true) {
-        const { done, value } = await reader.read()
+        const { done, value } = await readWithTimeout(reader)
 
         if (done) {
           // 流自然结束
@@ -106,6 +106,19 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
             continue
           }
 
+          // 处理 context_usage 命名事件（上下文 token 用量）
+          if (eventType === 'context_usage') {
+            try {
+              const parsed = JSON.parse(data)
+              if (parsed.budget !== undefined) {
+                onContextUsage?.(parsed)
+              }
+            } catch {
+              // 解析失败则忽略
+            }
+            continue
+          }
+
           // 处理命名事件
           if (eventType === 'error') {
             onError?.(`⚠️ ${data}`)
@@ -131,6 +144,8 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
     } catch (err: unknown) {
       if (aborted) return
       if (err instanceof DOMException && err.name === 'AbortError') return
+      // 关闭底层连接（空闲超时/异常路径），避免 fetch 流悬挂泄漏
+      controller.abort()
       onError?.(`⚠️ 连接失败: ${err instanceof Error ? err.message : '未知错误'}`)
       onComplete?.()
     }
@@ -145,4 +160,29 @@ export function createSSEConnection(opts: SSEOptions): { abort: () => void } {
       controller.abort()
     },
   }
+}
+
+/** 空闲超时：超过该时长无数据视为断连，防止 reader.read() 永久 pending 卡死 isStreaming。
+ * 单步 LLM 调用可能超过 60s，故放宽到 180s，避免误掐断正常长步骤 */
+const IDLE_TIMEOUT_MS = 180000
+
+function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<{ done: boolean; value?: Uint8Array }> {
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_, rejectTimeout) => {
+      timer = setTimeout(() => rejectTimeout(new Error('SSE 连接空闲超时（60s 无数据）')), IDLE_TIMEOUT_MS)
+    })
+    Promise.race([reader.read(), timeout]).then(
+      (v) => {
+        clearTimeout(timer!)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer!)
+        reject(e)
+      },
+    )
+  })
 }
